@@ -2902,13 +2902,17 @@ def _rebind_formed_reply_to_live_owner(row: sqlite3.Row) -> str | None:
     event.pop("candidate", None)
     return json.dumps(event, ensure_ascii=False, separators=(",", ":"))
 
-def _confirmed_self_reply_log_id(reply: str, after_log_id: int | None) -> int | None:
-    text = str(reply or "").strip()
-    if not text:
-        return None
+CONFIRMATION_READ_ROWS = 8
+
+
+def _recent_room_rows() -> list | None:
+    """The room's newest CONFIRMATION_READ_ROWS rows, oldest first, or None."""
     try:
         returncode, stdout_bytes, _ = _run_bounded_process(
-            [str(BIN), "local-read", str(_queue_expected_chat_id()), "--count", "8", "--json"],
+            [
+                str(BIN), "local-read", str(_queue_expected_chat_id()),
+                "--count", str(CONFIRMATION_READ_ROWS), "--json",
+            ],
             cwd=ROOT,
             env=os.environ.copy(),
             timeout=8.0,
@@ -2923,22 +2927,75 @@ def _confirmed_self_reply_log_id(reply: str, after_log_id: int | None) -> int | 
         rows = json.loads(stdout_bytes.decode("utf-8"))
     except (UnicodeError, json.JSONDecodeError):
         return None
-    if not isinstance(rows, list):
+    return rows if isinstance(rows, list) else None
+
+
+def _own_row_log_id(row: object, text: str) -> int | None:
+    """The log id of `row` when it is this room's own row reading exactly `text`."""
+    if not isinstance(row, dict) or not _is_self_chat_row(row):
+        return None
+    if "chat_id" in row and _fence_int(row["chat_id"]) != _queue_expected_chat_id():
+        return None
+    if str(row.get("message") or "").strip() != text:
+        return None
+    log_id = row.get("log_id")
+    if not isinstance(log_id, int) or isinstance(log_id, bool) or log_id <= 0:
+        return None
+    return log_id
+
+
+def _confirmed_self_reply_log_id(reply: str, after_log_id: int | None) -> int | None:
+    """The newest own row reading exactly `reply` after `after_log_id`."""
+    text = str(reply or "").strip()
+    if not text:
+        return None
+    rows = _recent_room_rows()
+    if rows is None:
         return None
     for row in reversed(rows):
-        if not isinstance(row, dict) or not _is_self_chat_row(row):
-            continue
-        if "chat_id" in row and _fence_int(row["chat_id"]) != _queue_expected_chat_id():
-            continue
-        if str(row.get("message") or "").strip() != text:
-            continue
-        log_id = row.get("log_id")
-        if not isinstance(log_id, int) or isinstance(log_id, bool) or log_id <= 0:
-            continue
-        if after_log_id is not None and log_id <= after_log_id:
-            continue
-        return log_id
+        log_id = _own_row_log_id(row, text)
+        if log_id is not None and (after_log_id is None or log_id > after_log_id):
+            return log_id
     return None
+
+
+def _send_confirmation_log_id(reply: str, pre_send_tail_log_id: object) -> int | None:
+    """The row one send added, judged the way local-send confirms it.
+
+    Only a row newer than the room's tail before the send counts, so a matching
+    row the account wrote earlier is never this send's proof. Two matching rows
+    are a duplicate, not a confirmation. A page that does not reach back to the
+    tail could hide one, so it confirms nothing either.
+    """
+    text = str(reply or "").strip()
+    if (
+        not text
+        or isinstance(pre_send_tail_log_id, bool)
+        or not isinstance(pre_send_tail_log_id, int)
+        or pre_send_tail_log_id <= 0
+    ):
+        return None
+    rows = _recent_room_rows()
+    if rows is None:
+        return None
+    reaches_tail = len(rows) < CONFIRMATION_READ_ROWS or any(
+        isinstance(row, dict)
+        and isinstance(row.get("log_id"), int)
+        and not isinstance(row.get("log_id"), bool)
+        and row["log_id"] <= pre_send_tail_log_id
+        for row in rows
+    )
+    if not reaches_tail:
+        return None
+    matches = [
+        log_id
+        for row in rows
+        if isinstance(row, dict)
+        and row.get("message_type", 1) == 1
+        and (log_id := _own_row_log_id(row, text)) is not None
+        and log_id > pre_send_tail_log_id
+    ]
+    return matches[0] if len(matches) == 1 else None
 def later_self_already_replied(
     after_log_id: int | None, reply: str | None = None
 ) -> bool:
@@ -13724,11 +13781,6 @@ def send_reply(
         and result.get("confirmed") is False
         and event_id
     ):
-        inbound = None
-        if isinstance(event, dict):
-            inbound = event.get("log_id")
-            if not isinstance(inbound, int) or isinstance(inbound, bool):
-                inbound = None
         reply_text = ""
         if connection is not None:
             queued = connection.execute(
@@ -13737,7 +13789,9 @@ def send_reply(
             ).fetchone()
             if queued is not None:
                 reply_text = str(queued["reply"] or "")
-        confirmed = _confirmed_self_reply_log_id(reply_text, inbound)
+        confirmed = _send_confirmation_log_id(
+            reply_text, result.get("pre_send_tail_log_id")
+        )
         if confirmed is not None:
             result["status"] = "confirmed_local_db"
             result["confirmed"] = True
