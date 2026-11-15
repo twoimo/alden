@@ -1751,14 +1751,42 @@ fn read_voice_process_args(pid: i32) -> Result<Option<VoiceProcessArgs>, BridgeE
         )
     };
     if result != 0 {
-        return if std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH) {
-            Ok(None) // Exited since ps; permission/parse failures still block spawn.
+        // Exited since ps (a zombie or a reaped PID) is not a listener.
+        // Anything still alive that we cannot read keeps blocking the spawn.
+        return if process_has_exited(pid) {
+            Ok(None)
         } else {
             Err(BridgeError::VoiceProcessCheck)
         };
     }
     bytes.truncate(size);
     parse_voice_process_args(&bytes).map(Some)
+}
+
+/// True only when the PID is gone or is a zombie. Live processes, including
+/// ones whose argv cannot be read, return false so they keep blocking a start.
+#[cfg(target_os = "macos")]
+fn process_has_exited(pid: i32) -> bool {
+    let mut info: libc::proc_bsdshortinfo = unsafe { std::mem::zeroed() };
+    let size = std::mem::size_of::<libc::proc_bsdshortinfo>();
+    let Ok(size_arg) = libc::c_int::try_from(size) else {
+        return false;
+    };
+    // SAFETY: info is writable for exactly size bytes; this is a read-only
+    // query that sends no signal.
+    let written = unsafe {
+        libc::proc_pidinfo(
+            pid,
+            libc::PROC_PIDT_SHORTBSDINFO,
+            0,
+            (&mut info as *mut libc::proc_bsdshortinfo).cast(),
+            size_arg,
+        )
+    };
+    if written == size_arg {
+        return info.pbsi_status == libc::SZOMB;
+    }
+    written <= 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -5389,6 +5417,27 @@ mod tests {
 
         assert!(matches!(result, Err(BridgeError::ActionNotAllowed)));
         assert_eq!(still_listed, Some(None), "running swap job was removed or relabelled");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn exited_candidates_are_not_read_as_a_failed_voice_check() {
+        // ps can list a same-user Python process that exits before its argv is
+        // read. macOS answers EINVAL for a zombie and for a PID that is gone, so
+        // the probe used to refuse every voice start in that window.
+        let mut child = Command::new("sh")
+            .args(["-c", "exit 0"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .spawn()
+            .unwrap();
+        let pid = i32::try_from(child.id()).unwrap();
+        thread::sleep(Duration::from_millis(200));
+        let zombie = read_voice_process_args(pid);
+        child.wait().unwrap();
+        let reaped = read_voice_process_args(pid);
+        assert!(matches!(zombie, Ok(None)), "zombie refused: {zombie:?}");
+        assert!(matches!(reaped, Ok(None)), "reaped pid refused: {reaped:?}");
     }
 
     #[test]
