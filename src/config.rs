@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
@@ -543,32 +543,19 @@ pub fn allowed_send_chat_targets(
         return true;
     }
 
-    let Some(root_str) = config.auto_reply.state_root.as_deref() else {
+    let Some(state_root) = config.auto_reply.state_root.as_deref() else {
         return false;
     };
-    let catalog_path = std::path::Path::new(root_str).join("menubar-room-catalog.json");
-    let Ok(catalog_bytes) = std::fs::read(&catalog_path) else {
+    // AutoReply startup uses this strict loader too. Every loaded room has a
+    // real chat ID, so a caller without one matches by title only, and a
+    // catalog the loader rejects authorizes nothing.
+    let Ok(rooms) = openkakao_cli::room_catalog::load_catalog_rooms(Path::new(state_root)) else {
         return false;
     };
-    let Ok(catalog_json) = serde_json::from_slice::<serde_json::Value>(&catalog_bytes) else {
-        return false;
-    };
-    let Some(rooms) = catalog_json.get("rooms").and_then(|rooms| rooms.as_array()) else {
-        return false;
-    };
-
     rooms.iter().any(|room| {
-        let Some(object) = room.as_object() else {
-            return false;
-        };
-        let r_id = object.get("chat_id").and_then(|id| id.as_i64());
-        let r_title = object
-            .get("title")
-            .and_then(|title| title.as_str())
-            .filter(|title| !title.is_empty());
-        let enabled = object.get("auto_reply") == Some(&serde_json::Value::Bool(true))
-            || object.get("geeknews") == Some(&serde_json::Value::Bool(true));
-        enabled && (chat_id == r_id || r_title == Some(chat_name))
+        (room.auto_reply || room.geeknews)
+            && (chat_id == Some(room.chat_id)
+                || (!room.title.is_empty() && room.title == chat_name))
     })
 }
 
@@ -757,6 +744,45 @@ mod tests {
             "Vision AI 경진대회",
             Some(437046948660911)
         ));
+    }
+
+    fn config_with_catalog(catalog: &str) -> (tempfile::TempDir, OpenKakaoConfig) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("menubar-room-catalog.json"), catalog)
+            .expect("write catalog");
+        let mut config = OpenKakaoConfig::default();
+        config.auto_reply.state_root = Some(dir.path().to_string_lossy().into_owned());
+        (dir, config)
+    }
+
+    #[test]
+    fn catalog_room_without_an_integer_chat_id_allows_no_other_room() {
+        let leaked: Vec<&str> = [
+            r#"{"rooms":[{"title":"A","auto_reply":true}]}"#,
+            r#"{"rooms":[{"chat_id":null,"title":"A","auto_reply":true}]}"#,
+            r#"{"rooms":[{"chat_id":"437046948660911","title":"A","geeknews":true}]}"#,
+            r#"{"rooms":[{"chat_id":1.5,"title":"A","auto_reply":true}]}"#,
+        ]
+        .into_iter()
+        .filter(|catalog| {
+            let (_dir, config) = config_with_catalog(catalog);
+            allowed_send_chat_targets(&config, "완전히 다른 방", None)
+        })
+        .collect();
+        assert!(
+            leaked.is_empty(),
+            "catalogs that authorized an unrelated room: {leaked:#?}"
+        );
+    }
+
+    #[test]
+    fn catalog_the_strict_loader_rejects_authorizes_none_of_its_rooms() {
+        let (_dir, config) = config_with_catalog(
+            r#"{"rooms":[{"chat_id":42,"title":"B","auto_reply":true},{"title":"A","auto_reply":true}]}"#,
+        );
+        assert!(!allowed_send_chat_targets(&config, "B", None));
+        assert!(!allowed_send_chat_targets(&config, "B", Some(42)));
+        assert!(!allowed_send_chat_targets(&config, "A", None));
     }
 
     #[test]
