@@ -51,6 +51,10 @@ const MODEL_SWAP_OPT_IN: &str = "qwen38-27b-explicit-v1";
 const MODEL_SWAP_CANCEL_DIR: &str = "model-swap-cancel";
 const VOICE_TTS_OUT_NAME: &str = "jarvis-voice-out.wav";
 static VOICE_SESSION_START_LOCK: Mutex<()> = Mutex::new(());
+// Registry keys for children started without a caller token. The prefix is
+// refused for caller tokens, so the UI cannot cancel these entries by name.
+const INTERNAL_CANCEL_PREFIX: &str = "internal:";
+static INTERNAL_CANCEL_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 #[derive(Debug, Error)]
 pub enum BridgeError {
@@ -591,6 +595,9 @@ impl PythonBridge {
     }
 
     pub fn cancel(&self, token_id: &str) -> bool {
+        if token_id.starts_with(INTERNAL_CANCEL_PREFIX) {
+            return false;
+        }
         let Ok(map) = self.cancellations.lock() else {
             return false;
         };
@@ -737,31 +744,38 @@ impl PythonBridge {
         } else {
             None
         };
-        if let Some(token) = token_id {
-            {
-                let mut map = self
-                    .cancellations
-                    .lock()
-                    .map_err(|_| BridgeError::StateIo)?;
-                if map.contains_key(token) {
-                    return Err(BridgeError::ActionNotAllowed);
-                }
-                if let Some(flag) = global_abort_flag.as_ref() {
-                    if global_abort_is_latched(&self.config.state_root) {
-                        // The child still starts so Python can return its fixed
-                        // aborted envelope; Rust enforces the hard deadline.
-                        flag.store(true, Ordering::SeqCst);
-                    }
-                }
-                map.insert(
-                    token.to_string(),
-                    CancellationHandle {
-                        flag: cancel_flag.clone(),
-                        cooperative_marker: cooperative_marker.clone(),
-                        global_abort_flag: global_abort_flag.clone(),
-                    },
-                );
+        // Every child is registered so global abort and shutdown can reach it.
+        // Callers without a token get an internal key the UI cannot cancel.
+        let registry_key = match token_id {
+            Some(token) if token.starts_with(INTERNAL_CANCEL_PREFIX) => {
+                return Err(BridgeError::ActionNotAllowed);
             }
+            Some(token) => token.to_string(),
+            None => internal_cancel_key(),
+        };
+        {
+            let mut map = self
+                .cancellations
+                .lock()
+                .map_err(|_| BridgeError::StateIo)?;
+            if map.contains_key(&registry_key) {
+                return Err(BridgeError::ActionNotAllowed);
+            }
+            if let Some(flag) = global_abort_flag.as_ref() {
+                if global_abort_is_latched(&self.config.state_root) {
+                    // The child still starts so Python can return its fixed
+                    // aborted envelope; Rust enforces the hard deadline.
+                    flag.store(true, Ordering::SeqCst);
+                }
+            }
+            map.insert(
+                registry_key.clone(),
+                CancellationHandle {
+                    flag: cancel_flag.clone(),
+                    cooperative_marker: cooperative_marker.clone(),
+                    global_abort_flag: global_abort_flag.clone(),
+                },
+            );
         }
 
         let mut args = vec![
@@ -791,10 +805,8 @@ impl PythonBridge {
                 recovery_timeout: MODEL_SWAP_RECOVERY_TIMEOUT,
             },
         );
-        if let Some(token) = token_id {
-            if let Ok(mut map) = self.cancellations.lock() {
-                map.remove(token);
-            }
+        if let Ok(mut map) = self.cancellations.lock() {
+            map.remove(&registry_key);
         }
         if let Some(marker) = cooperative_marker {
             let _ = fs::remove_file(marker);
@@ -1397,6 +1409,11 @@ fn settings_action_args(
         _ => return Err(BridgeError::ActionNotAllowed),
     }
     Ok(args)
+}
+
+fn internal_cancel_key() -> String {
+    let seq = INTERNAL_CANCEL_SEQ.fetch_add(1, Ordering::Relaxed);
+    format!("{INTERNAL_CANCEL_PREFIX}{seq}")
 }
 
 fn valid_model_swap_token(value: &str) -> bool {
@@ -4948,5 +4965,121 @@ mod tests {
             Some(&Some(plan.tts_out.clone().into_os_string()))
         );
         let _ = fs::remove_dir_all(&temp);
+    }
+
+    // Fixture bridge: every bundled payload path exists with synthetic bytes,
+    // so resource validation passes and tests reach the real spawn path. The
+    // dev layout with `python3` runs the synthetic script found at the menubar
+    // path. Nothing from the installed app, a LaunchAgent, or the real state
+    // directories is touched.
+    fn write_fixture_file(path: &Path, bytes: &[u8], executable: bool) {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, bytes).unwrap();
+        fs::set_permissions(
+            path,
+            std::os::unix::fs::PermissionsExt::from_mode(if executable { 0o755 } else { 0o644 }),
+        )
+        .unwrap();
+    }
+
+    fn fixture_bridge(name: &str, script: &str) -> (PythonBridge, PathBuf) {
+        let root = std::env::temp_dir()
+            .canonicalize()
+            .unwrap()
+            .join(format!("openkakao-bridge-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        for relative in resource_layout::DATA_FILES {
+            write_fixture_file(&root.join(relative), b"fixture only", false);
+        }
+        write_fixture_file(&root.join(resource_layout::CLI), b"#!/bin/sh\nexit 0\n", true);
+        write_fixture_file(&root.join(resource_layout::MENUBAR_SCRIPT), script.as_bytes(), false);
+        let mut bridge = PythonBridge::new();
+        let config = Arc::get_mut(&mut bridge.config).unwrap();
+        config.python = PathBuf::from("python3");
+        config.resources = Ok(ResourceLayout {
+            root: root.clone(),
+            installed: false,
+            script: root.join(resource_layout::MENUBAR_SCRIPT),
+            bin: root.join(resource_layout::CLI),
+        });
+        config.state_root = root.join("state");
+        config.logs_dir = root.join("logs");
+        (bridge, root)
+    }
+
+    /// Synthetic child: records its own PID under the state root, then sleeps.
+    const SLEEPING_CHILD: &str = "import os, sys, time\nfrom pathlib import Path\nstate = Path(sys.argv[sys.argv.index('--state-root') + 1])\nstate.mkdir(parents=True, exist_ok=True)\n(state / 'child.pid').write_text(str(os.getpid()))\ntime.sleep(30)\n";
+
+    fn wait_for_pid_file(path: &Path) -> i32 {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            if let Some(pid) = fs::read_to_string(path)
+                .ok()
+                .and_then(|text| text.trim().parse::<i32>().ok())
+            {
+                return pid;
+            }
+            assert!(Instant::now() < deadline, "child never published its pid");
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// Signal 0 probes existence only for a PID this test spawned. A reaped
+    /// process reports ESRCH; a zombie still answers, so the probe also proves
+    /// the bridge reaped it.
+    fn pid_is_gone(pid: i32) -> bool {
+        let probe = unsafe { libc::kill(pid, 0) };
+        probe == -1 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+    }
+
+    fn wait_until_gone(pid: i32, limit: Duration) -> bool {
+        let deadline = Instant::now() + limit;
+        while Instant::now() < deadline {
+            if pid_is_gone(pid) {
+                return true;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        pid_is_gone(pid)
+    }
+
+    /// Cleanup only: kills a PID that a test's own synthetic child published.
+    fn kill_own_child(pid: i32) {
+        if pid > 0 && !pid_is_gone(pid) {
+            unsafe {
+                libc::kill(pid, libc::SIGKILL);
+            }
+        }
+    }
+
+    #[test]
+    fn global_abort_reaches_untokened_child() {
+        // mlx-server-launch, model-set, model-prepare, room-upsert and the
+        // knowledge actions run without a token. Global abort must still reach
+        // them during their long timeouts.
+        let (bridge, root) = fixture_bridge("untokened-abort", SLEEPING_CHILD);
+        let worker = bridge.clone();
+        let (outcome_tx, outcome_rx) = std::sync::mpsc::channel();
+        thread::spawn(move || {
+            let result = worker.run_python_with_output_limit(PythonRun {
+                timeout: Duration::from_secs(60),
+                ..PythonRun::default()
+            });
+            let _ = outcome_tx.send(result.map(|_| ()));
+        });
+        let pid = wait_for_pid_file(&bridge.config.state_root.join("child.pid"));
+        let started = Instant::now();
+        bridge.global_abort().unwrap();
+        let outcome = outcome_rx.recv_timeout(Duration::from_secs(5));
+        let returned_in = started.elapsed();
+        let gone = wait_until_gone(pid, Duration::from_secs(2));
+        kill_own_child(pid);
+        fs::remove_dir_all(root).unwrap();
+        assert!(
+            matches!(outcome, Ok(Err(BridgeError::Cancelled))),
+            "untokened child was not aborted: {outcome:?}"
+        );
+        assert!(returned_in < Duration::from_secs(2));
+        assert!(gone, "aborted child survived");
     }
 }
