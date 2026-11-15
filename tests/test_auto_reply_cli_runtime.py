@@ -22,6 +22,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 
+from tests import auto_reply_hermetic as hermetic
+
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
@@ -84,7 +86,20 @@ def settling_sleep(db_watch, real_sleep, real_monotonic, timeout: float = 5.0):
     return sleep
 
 
+def setUpModule():
+    # Socket and real-HOME file guards for every test in this module. Each
+    # test gets its own empty HOME in setUp (see tests/auto_reply_hermetic.py).
+    hermetic.install_guards()
+
+
+def tearDownModule():
+    hermetic.uninstall_guards()
+
+
 class AutoReplyCliRuntimeTests(unittest.TestCase):
+    def setUp(self):
+        hermetic.begin_test(self)
+
     @staticmethod
     def _load_auto_reply_module(name):
         spec = importlib.util.spec_from_file_location(
@@ -94,6 +109,10 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
         module = importlib.util.module_from_spec(spec)
         assert spec.loader is not None
         spec.loader.exec_module(module)
+        # The failure-record probe opens a real loopback socket. What a
+        # model-failure row records must not depend on whether something happens
+        # to listen on this machine, so the probe is pinned to "unreachable".
+        module._model_endpoint_reachable = lambda *_args, **_kwargs: False
         production_queue_connection = module._queue_connection
 
         def supervisor_initialized_queue_connection():
@@ -115,6 +134,41 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
         module._production_queue_connection = production_queue_connection
         module._queue_connection = supervisor_initialized_queue_connection
         return module
+
+    def _room_is_current(self, module):
+        """Treat the room watcher as current at each inbound event's own tail.
+
+        Production answers "is the room still at this event" from the
+        supervisor's db-watch fence. A hermetic test has no supervisor, so
+        without this every freshness check would defer the job as
+        ``context_freshness_unavailable``. The stub says the room has not moved
+        past the event, which is the premise of the tests that call it.
+        """
+        self.enterContext(
+            mock.patch.object(
+                module,
+                "conversation_advanced_past_event",
+                return_value=False,
+            )
+        )
+        self.enterContext(
+            mock.patch.object(
+                module,
+                "stable_room_watermark_log_id",
+                side_effect=lambda event: event.get("log_id"),
+            )
+        )
+
+    @staticmethod
+    def _point_queue(module, directory):
+        """Put the queue and its lock in one room directory, as production does.
+
+        Production derives both paths from the same state root. A test that
+        relocates only the queue would leave the lock behind and trip the
+        worker's parent check, which is a fixture mismatch, not a runtime fault.
+        """
+        module.QUEUE = Path(directory) / "reply-queue.sqlite3"
+        module.LOCK = module.QUEUE.parent / module.LOCK.name
 
     @staticmethod
     def _worker_queue_connection(module):
@@ -211,7 +265,7 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
             root = Path(temporary)
             root.chmod(0o700)
             room = root / "42"
-            module.QUEUE = room / "reply-queue.sqlite3"
+            self._point_queue(module, room)
             with mock.patch.dict(
                 os.environ,
                 {module.TARGET_CHAT_ID_ENV: "42"},
@@ -621,6 +675,7 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
 
     def test_questions_and_advice_use_only_the_immediate_component(self):
         module = self._load_auto_reply_module("auto_reply_question_timing_test")
+        self._room_is_current(module)
         stats = self._timing_stats(module)
 
         question_rng = random.Random(20260813)
@@ -1098,7 +1153,7 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
     def test_author_identity_drift_is_durable_skip_before_model_or_send(self):
         module = self._load_auto_reply_module("auto_reply_identity_drift_job_test")
         with tempfile.TemporaryDirectory() as temporary:
-            module.QUEUE = Path(temporary) / "reply-queue.sqlite3"
+            self._point_queue(module, Path(temporary))
             environment = self._write_numeric_enrollment(
                 module,
                 temporary,
@@ -1450,12 +1505,16 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
         self.assertFalse(
             module._outbound_reaction_allows("ㅎㅎ 그건 좀", plain_inbound, laughter_allowed=True)
         )
-        self.assertEqual(
-            module._sanitize_outbound_reaction(
-                "ㅋㅋㅋㅋ 그건 좀", plain_inbound, laughter_allowed=True
-            ),
-            "ㅋㅋㅋㅋ 그건 좀",
-        )
+        # Each laughter run is re-drawn from the owner's length distribution.
+        # Pin that one draw to the length asserted here, so the assertion checks
+        # the allowance and not the random generator.
+        with mock.patch("random.choice", return_value=4):
+            self.assertEqual(
+                module._sanitize_outbound_reaction(
+                    "ㅋㅋㅋㅋ 그건 좀", plain_inbound, laughter_allowed=True
+                ),
+                "ㅋㅋㅋㅋ 그건 좀",
+            )
         reasons: list[str] = []
         # The draft must not echo the inbound, otherwise the echo rule rejects
         # it first and the laughter assertion would prove nothing.
@@ -3104,6 +3163,7 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
 
     def test_link_fetch_requires_separate_opt_in_and_never_ignores_overflow(self):
         module = self._load_auto_reply_module("auto_reply_link_egress_policy_test")
+        self._room_is_current(module)
         now = int(time.time())
         one = self._burst_event(module, 51, "https://example.com/a", now)
         three = self._burst_event(
@@ -4918,6 +4978,10 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
 
     def test_recipient_bundle_is_strict_and_exposes_register_hint(self):
         module = self._load_auto_reply_module("auto_reply_recipient_bundle_test")
+        self._room_is_current(module)
+        # The worker resolves its CLI from the operator's installed app when
+        # BIN is not pinned; this test has no installed app.
+        module.BIN = Path(__file__)
 
         def raw_profile(endings):
             return {
@@ -5516,7 +5580,8 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
             }
             with mock.patch.dict(os.environ, environment, clear=False):
                 module = self._load_auto_reply_module("auto_reply_codex_runner_test")
-            module.QUEUE = Path(temporary) / "reply-queue.sqlite3"
+                self._room_is_current(module)
+            self._point_queue(module, Path(temporary))
             self.assertTrue(module.runner_is_trusted())
             captured = {}
 
@@ -5938,6 +6003,7 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
                 module = self._load_auto_reply_module(
                     "auto_reply_rate_limit_circuit_test"
                 )
+                self._room_is_current(module)
             calls = []
 
             def limited(command, **kwargs):
@@ -6017,7 +6083,7 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
     def test_model_call_lease_allows_only_one_probe(self):
         module = self._load_auto_reply_module("auto_reply_model_call_lease_test")
         with tempfile.TemporaryDirectory() as temporary:
-            module.QUEUE = Path(temporary) / "reply-queue.sqlite3"
+            self._point_queue(module, Path(temporary))
             first = module._acquire_model_call_slot(now=10_000.0)
             second = module._acquire_model_call_slot(now=10_001.0)
             self.assertTrue(first["allowed"])
@@ -6039,13 +6105,13 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
             second_room.mkdir(parents=True, mode=0o700)
             environment = {"OPENKAKAO_MODEL_CIRCUIT_DB": str(global_circuit)}
             with mock.patch.dict(os.environ, environment, clear=False):
-                module.QUEUE = first_room / "reply-queue.sqlite3"
+                self._point_queue(module, first_room)
                 first = module._acquire_model_call_slot(now=20_000.0)
                 self.assertTrue(first["allowed"])
 
                 # A different room queue must observe the same account-wide
                 # in-flight lease and must not start a second Luna process.
-                module.QUEUE = second_room / "reply-queue.sqlite3"
+                self._point_queue(module, second_room)
                 second = module._acquire_model_call_slot(now=20_001.0)
                 self.assertFalse(second["allowed"])
                 self.assertEqual(second["failure_class"], "call_in_flight")
@@ -6061,7 +6127,7 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
                         now=20_002.0,
                     )
                 self.assertEqual(retry_at, 20_002.0 + 6 * 60 * 60)
-                module.QUEUE = first_room / "reply-queue.sqlite3"
+                self._point_queue(module, first_room)
                 third = module._acquire_model_call_slot(now=20_003.0)
                 self.assertFalse(third["allowed"])
                 self.assertEqual(third["failure_class"], "usage_limit")
@@ -6080,7 +6146,7 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
             root.chmod(0o700)
             room = root / "rooms" / "202"
             room.mkdir(parents=True, mode=0o700)
-            module.QUEUE = room / "reply-queue.sqlite3"
+            self._point_queue(module, room)
             global_circuit = root / "model-circuit.sqlite3"
             base = 1_000_000.0
             rearm_at = base + 2.0
@@ -6244,7 +6310,7 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
             root.chmod(0o700)
             room = root / "rooms" / "202"
             room.mkdir(parents=True, mode=0o700)
-            module.QUEUE = room / "reply-queue.sqlite3"
+            self._point_queue(module, room)
             global_circuit = root / "model-circuit.sqlite3"
             base = 2_000_000.0
 
@@ -6369,7 +6435,7 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
             "auto_reply_shared_model_rearm_atomic_test"
         )
         with tempfile.TemporaryDirectory() as temporary:
-            module.QUEUE = Path(temporary) / "reply-queue.sqlite3"
+            self._point_queue(module, Path(temporary))
             queue = self._worker_queue_connection(module)
             try:
                 base = 3_000_000.0
@@ -6427,7 +6493,7 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
             root = Path(temporary)
             room = root / "rooms" / "101"
             room.mkdir(parents=True, mode=0o700)
-            module.QUEUE = room / "reply-queue.sqlite3"
+            self._point_queue(module, room)
             legacy = self._worker_queue_connection(module)
             try:
                 legacy.execute(
@@ -6687,7 +6753,7 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
             "auto_reply_luna_capacity_probe_cas_refusal_test"
         )
         with tempfile.TemporaryDirectory() as temporary:
-            module.QUEUE = Path(temporary) / "reply-queue.sqlite3"
+            self._point_queue(module, Path(temporary))
             now = 10_000.0
             open_until = now + 3_600.0
             updated_at = now - 30.0
@@ -6891,9 +6957,10 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
 
     def test_model_limit_defers_queue_without_terminal_context_projection(self):
         module = self._load_auto_reply_module("auto_reply_model_queue_defer_test")
+        self._room_is_current(module)
         stats = self._timing_stats(module)
         with tempfile.TemporaryDirectory() as temporary:
-            module.QUEUE = Path(temporary) / "reply-queue.sqlite3"
+            self._point_queue(module, Path(temporary))
             now = int(time.time())
             event = self._burst_event(module, 321, "question?", now)
             event["recent_messages"] = [self._recent_row(event)]
@@ -6982,6 +7049,7 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
         module = self._load_auto_reply_module(
             "auto_reply_repeated_model_queue_defer_test"
         )
+        self._room_is_current(module)
         initial_stats = self._timing_stats(module)
         refreshed_stats = json.loads(json.dumps(initial_stats))
         refreshed_stats["p90_seconds"] = 900.0
@@ -7016,7 +7084,7 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
         )
 
         with tempfile.TemporaryDirectory() as temporary:
-            module.QUEUE = Path(temporary) / "reply-queue.sqlite3"
+            self._point_queue(module, Path(temporary))
             with mock.patch.object(module.time, "time", return_value=base):
                 self.assertTrue(module.enqueue_event(event))
             connection = self._worker_queue_connection(module)
@@ -9567,6 +9635,17 @@ print(json.dumps({
                 db_watch = importlib.util.module_from_spec(spec)
                 assert spec.loader is not None
                 spec.loader.exec_module(db_watch)
+                # The enrolled room's queue lives in its own room_state_root, which
+                # is named for the chat id the poll is bound to.
+                room_root.chmod(0o700)
+                db_watch.QUEUE = room_root / "reply-queue.sqlite3"
+                # The supervisor creates the attested v2 queue before the watcher
+                # attaches; the watcher only connects to an existing one.
+                db_watch.transition_journal.open_queue(
+                    db_watch.QUEUE,
+                    create=True,
+                    expected_chat_id=42,
+                ).close()
                 started = []
                 db_watch.find_chat = lambda: self.fail(
                     "CLI enrollment must avoid an unbounded local-chats listing"
@@ -10526,6 +10605,7 @@ print(json.dumps({
         module = self._load_auto_reply_module(
             "auto_reply_quoted_reply_analysis_test"
         )
+        self._room_is_current(module)
         now = int(time.time())
         source = self._burst_event(
             module,
@@ -10597,6 +10677,7 @@ print(json.dumps({
 
     def test_analysis_prompt_contains_current_message_only_as_incoming(self):
         module = self._load_auto_reply_module("auto_reply_recent_prompt_test")
+        self._room_is_current(module)
         now = int(time.time())
         previous = self._burst_event(
             module,
@@ -10655,7 +10736,7 @@ print(json.dumps({
     def test_enqueue_durably_links_newer_same_author_before_generation(self):
         module = self._load_auto_reply_module("auto_reply_burst_queue_test")
         with tempfile.TemporaryDirectory() as temporary:
-            module.QUEUE = Path(temporary) / "reply-queue.sqlite3"
+            self._point_queue(module, Path(temporary))
             first = self._burst_event(module, 201, "first", 2_000)
             first["recent_messages"] = [self._recent_row(first)]
             second = self._burst_event(
@@ -10704,7 +10785,7 @@ print(json.dumps({
     def test_oversized_successor_does_not_supersede_unincluded_predecessor(self):
         module = self._load_auto_reply_module("auto_reply_burst_oversized_queue_test")
         with tempfile.TemporaryDirectory() as temporary:
-            module.QUEUE = Path(temporary) / "reply-queue.sqlite3"
+            self._point_queue(module, Path(temporary))
             first = self._burst_event(module, 211, "first", 2_100)
             first["recent_messages"] = [self._recent_row(first)]
             oversized = self._burst_event(
@@ -10743,7 +10824,7 @@ print(json.dumps({
             module.BURST_MAX_GAP_SECONDS,
         )
         with tempfile.TemporaryDirectory() as temporary:
-            module.QUEUE = Path(temporary) / "reply-queue.sqlite3"
+            self._point_queue(module, Path(temporary))
             first = self._burst_event(module, 251, "one", 2_500)
             first["recent_messages"] = [self._recent_row(first)]
             second = self._burst_event(
@@ -10812,7 +10893,7 @@ print(json.dumps({
         module = self._load_auto_reply_module("auto_reply_burst_media_owner_test")
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            module.QUEUE = root / "reply-queue.sqlite3"
+            self._point_queue(module, root)
             media_dir = root / f"{module.MEDIA_DIR_PREFIX}owned"
             media_dir.mkdir(mode=0o700)
             marker = media_dir / module.MEDIA_ACTIVE_MARKER
@@ -10851,8 +10932,9 @@ print(json.dumps({
 
     def test_supersession_race_linearizes_before_sending(self):
         module = self._load_auto_reply_module("auto_reply_burst_race_test")
+        self._room_is_current(module)
         with tempfile.TemporaryDirectory() as temporary:
-            module.QUEUE = Path(temporary) / "reply-queue.sqlite3"
+            self._point_queue(module, Path(temporary))
             first = self._burst_event(module, 301, "first", 3_000)
             first["recent_messages"] = [self._recent_row(first)]
             second = self._burst_event(
@@ -10893,7 +10975,7 @@ print(json.dumps({
 
         module = self._load_auto_reply_module("auto_reply_burst_send_wins_test")
         with tempfile.TemporaryDirectory() as temporary:
-            module.QUEUE = Path(temporary) / "reply-queue.sqlite3"
+            self._point_queue(module, Path(temporary))
             first = self._burst_event(module, 401, "first", 4_000)
             first["recent_messages"] = [self._recent_row(first)]
             second = self._burst_event(
@@ -11044,7 +11126,7 @@ print(json.dumps({
                 clear=False,
             ),
         ):
-            module.QUEUE = Path(temporary) / "rooms" / "42" / "reply-queue.sqlite3"
+            AutoReplyCliRuntimeTests._point_queue(module, Path(temporary) / "rooms" / "42")
             event = self._burst_event(module, 420, "question?", int(time.time()))
             event["burst_tail_log_id"] = 420
             event["recent_messages"] = [self._recent_row(event)]
@@ -11303,6 +11385,7 @@ print(json.dumps({
 
     def test_stale_backlog_uses_sample_distribution_upper_before_model(self):
         module = self._load_auto_reply_module("auto_reply_stale_backlog_test")
+        self._room_is_current(module)
         stats = self._timing_stats(module)
         self.assertEqual(
             module.response_delay_distribution(stats)["global_upper_seconds"],
@@ -11487,6 +11570,7 @@ print(json.dumps({
 
     def test_process_schedules_from_incoming_message_creation(self):
         module = self._load_auto_reply_module("auto_reply_message_due_test")
+        self._room_is_current(module)
         stats = self._timing_stats(module)
         now = int(time.time())
         event = self._burst_event(module, 441, "question?", now - 40)
@@ -11500,7 +11584,7 @@ print(json.dumps({
             style_profile={"policy_version": module.STYLE_POLICY_VERSION},
         )
         with tempfile.TemporaryDirectory() as temporary:
-            module.QUEUE = Path(temporary) / "reply-queue.sqlite3"
+            self._point_queue(module, Path(temporary))
             self.assertTrue(module.enqueue_event(event))
             connection = self._worker_queue_connection(module)
             try:
@@ -11581,10 +11665,12 @@ print(json.dumps({
         module = self._load_auto_reply_module(
             "auto_reply_question_restart_timing_test"
         )
+        self._room_is_current(module)
         now = int(time.time())
         event = self._burst_event(module, 443, "질문이에요?", now)
         event["recent_messages"] = [self._recent_row(event)]
         prepared = module._prepare_burst_event(event)
+        prepared["analysis_watermark_log_id"] = prepared["log_id"]
         prepared["response_window_upper_seconds"] = 300.0
         prepared["response_timing"] = {
             "delay_seconds": 12.4,
@@ -11597,7 +11683,7 @@ print(json.dumps({
             "response_window_upper_seconds": 300.0,
         }
         with tempfile.TemporaryDirectory() as temporary:
-            module.QUEUE = Path(temporary) / "reply-queue.sqlite3"
+            self._point_queue(module, Path(temporary))
             self.assertTrue(module.enqueue_event(prepared))
             first_connection = self._worker_queue_connection(module)
             first_connection.execute(
@@ -11678,13 +11764,15 @@ print(json.dumps({
 
     def test_scheduled_stale_backlog_is_skipped_before_send(self):
         module = self._load_auto_reply_module("auto_reply_scheduled_stale_test")
+        self._room_is_current(module)
         now = int(time.time())
         event = self._burst_event(module, 445, "old scheduled", now - 61)
         event["recent_messages"] = [self._recent_row(event)]
         prepared = module._prepare_burst_event(event)
+        prepared["analysis_watermark_log_id"] = prepared["log_id"]
         prepared["response_window_upper_seconds"] = 60.0
         with tempfile.TemporaryDirectory() as temporary:
-            module.QUEUE = Path(temporary) / "reply-queue.sqlite3"
+            self._point_queue(module, Path(temporary))
             self.assertTrue(module.enqueue_event(prepared))
             connection = self._worker_queue_connection(module)
             try:
@@ -11738,13 +11826,16 @@ print(json.dumps({
 
     def test_formed_scheduled_reply_gives_up_after_pre_send_grace(self):
         module = self._load_auto_reply_module("auto_reply_formed_reply_grace_test")
+        self.enterContext(mock.patch.object(module, "durable_policy_skip", return_value=True))
+        self._room_is_current(module)
         now = int(time.time())
         event = self._burst_event(module, 446, "old scheduled", now - 400)
         event["recent_messages"] = [self._recent_row(event)]
         prepared = module._prepare_burst_event(event)
+        prepared["analysis_watermark_log_id"] = prepared["log_id"]
         prepared["response_window_upper_seconds"] = 60.0
         with tempfile.TemporaryDirectory() as temporary:
-            module.QUEUE = Path(temporary) / "reply-queue.sqlite3"
+            self._point_queue(module, Path(temporary))
             self.assertTrue(module.enqueue_event(prepared))
             connection = self._worker_queue_connection(module)
             try:
@@ -11818,13 +11909,15 @@ print(json.dumps({
 
     def test_formed_scheduled_reply_retries_within_pre_send_grace(self):
         module = self._load_auto_reply_module("auto_reply_formed_reply_within_grace_test")
+        self._room_is_current(module)
         now = int(time.time())
         event = self._burst_event(module, 446, "old scheduled", now - 70)
         event["recent_messages"] = [self._recent_row(event)]
         prepared = module._prepare_burst_event(event)
+        prepared["analysis_watermark_log_id"] = prepared["log_id"]
         prepared["response_window_upper_seconds"] = 60.0
         with tempfile.TemporaryDirectory() as temporary:
-            module.QUEUE = Path(temporary) / "reply-queue.sqlite3"
+            self._point_queue(module, Path(temporary))
             self.assertTrue(module.enqueue_event(prepared))
             connection = self._worker_queue_connection(module)
             try:
@@ -11899,13 +11992,15 @@ print(json.dumps({
         module = self._load_auto_reply_module(
             "auto_reply_scheduled_presend_requeue_test"
         )
+        self._room_is_current(module)
         now = int(time.time())
         event = self._burst_event(module, 447, "question?", now)
         event["recent_messages"] = [self._recent_row(event)]
         prepared = module._prepare_burst_event(event)
+        prepared["analysis_watermark_log_id"] = prepared["log_id"]
         prepared["response_window_upper_seconds"] = 300.0
         with tempfile.TemporaryDirectory() as temporary:
-            module.QUEUE = Path(temporary) / "reply-queue.sqlite3"
+            self._point_queue(module, Path(temporary))
             self.assertTrue(module.enqueue_event(prepared))
             connection = self._worker_queue_connection(module)
             try:
@@ -11981,13 +12076,15 @@ print(json.dumps({
         module = self._load_auto_reply_module(
             "auto_reply_scheduled_send_phase_test"
         )
+        self._room_is_current(module)
         now = int(time.time())
         event = self._burst_event(module, 448, "question?", now)
         event["recent_messages"] = [self._recent_row(event)]
         prepared = module._prepare_burst_event(event)
+        prepared["analysis_watermark_log_id"] = prepared["log_id"]
         prepared["response_window_upper_seconds"] = 300.0
         with tempfile.TemporaryDirectory() as temporary:
-            module.QUEUE = Path(temporary) / "reply-queue.sqlite3"
+            self._point_queue(module, Path(temporary))
             self.assertTrue(module.enqueue_event(prepared))
             connection = self._worker_queue_connection(module)
             try:
@@ -12117,10 +12214,12 @@ print(json.dumps({
         module = self._load_auto_reply_module(
             "auto_reply_post_send_successor_fence_test"
         )
+        self._room_is_current(module)
         now = int(time.time())
         first = self._burst_event(module, 453, "first", now)
         first["recent_messages"] = [self._recent_row(first)]
         first = module._prepare_burst_event(first)
+        first["analysis_watermark_log_id"] = first["log_id"]
         first["response_window_upper_seconds"] = 300.0
         second = self._burst_event(
             module,
@@ -12131,7 +12230,7 @@ print(json.dumps({
         )
         second["recent_messages"].append(self._recent_row(second))
         with tempfile.TemporaryDirectory() as temporary:
-            module.QUEUE = Path(temporary) / "reply-queue.sqlite3"
+            self._point_queue(module, Path(temporary))
             self.assertTrue(module.enqueue_event(first))
             connection = self._worker_queue_connection(module)
             try:
@@ -12251,7 +12350,7 @@ print(json.dumps({
         )
         second["recent_messages"].append(self._recent_row(second))
         with tempfile.TemporaryDirectory() as temporary:
-            module.QUEUE = Path(temporary) / "reply-queue.sqlite3"
+            self._point_queue(module, Path(temporary))
             self.assertTrue(module.enqueue_event(first))
             connection = self._worker_queue_connection(module)
             try:
@@ -12297,7 +12396,7 @@ print(json.dumps({
     def test_processing_error_race_projects_new_successor(self):
         module = self._load_auto_reply_module("auto_reply_burst_error_race_test")
         with tempfile.TemporaryDirectory() as temporary:
-            module.QUEUE = Path(temporary) / "reply-queue.sqlite3"
+            self._point_queue(module, Path(temporary))
             first = self._burst_event(module, 451, "first", 4_500)
             first["recent_messages"] = [self._recent_row(first)]
             second = self._burst_event(
@@ -12350,7 +12449,7 @@ print(json.dumps({
     def test_send_reply_blocks_superseded_job_before_sending_transition(self):
         module = self._load_auto_reply_module("auto_reply_burst_presend_test")
         with tempfile.TemporaryDirectory() as temporary:
-            module.QUEUE = Path(temporary) / "reply-queue.sqlite3"
+            self._point_queue(module, Path(temporary))
             now = int(time.time())
             first = self._burst_event(module, 501, "first", now)
             first["recent_messages"] = [self._recent_row(first)]
@@ -12642,7 +12741,7 @@ print(json.dumps({
         previous = os.environ.get("OPENKAKAO_TARGET_CHAT_ID")
         os.environ["OPENKAKAO_TARGET_CHAT_ID"] = "42"
         with tempfile.TemporaryDirectory() as temporary:
-            module.QUEUE = Path(temporary) / "42" / "reply-queue.sqlite3"
+            self._point_queue(module, Path(temporary) / "42")
             connection = self._worker_queue_connection(module)
             try:
                 now = time.time()
@@ -12748,7 +12847,7 @@ print(json.dumps({
         previous = os.environ.get("OPENKAKAO_TARGET_CHAT_ID")
         os.environ["OPENKAKAO_TARGET_CHAT_ID"] = "42"
         with tempfile.TemporaryDirectory() as temporary:
-            module.QUEUE = Path(temporary) / "42" / "reply-queue.sqlite3"
+            self._point_queue(module, Path(temporary) / "42")
             connection = self._worker_queue_connection(module)
             try:
                 now = time.time()
@@ -12841,7 +12940,7 @@ print(json.dumps({
         event["recent_messages"] = [self._recent_row(event)]
         calls = []
         with tempfile.TemporaryDirectory() as temporary:
-            module.QUEUE = Path(temporary) / "reply-queue.sqlite3"
+            self._point_queue(module, Path(temporary))
             self.assertTrue(module.enqueue_event(event))
             connection = self._worker_queue_connection(module)
             try:
@@ -12930,7 +13029,7 @@ print(json.dumps({
         event = self._burst_event(module, 514, "question", int(time.time()))
         event["recent_messages"] = [self._recent_row(event)]
         with tempfile.TemporaryDirectory() as temporary:
-            module.QUEUE = Path(temporary) / "reply-queue.sqlite3"
+            self._point_queue(module, Path(temporary))
             self.assertTrue(module.enqueue_event(event))
             connection = self._worker_queue_connection(module)
             connection.execute(
@@ -13011,7 +13110,7 @@ print(json.dumps({
         event = self._burst_event(module, 515, "question", int(time.time()))
         event["recent_messages"] = [self._recent_row(event)]
         with tempfile.TemporaryDirectory() as temporary:
-            module.QUEUE = Path(temporary) / "reply-queue.sqlite3"
+            self._point_queue(module, Path(temporary))
             self.assertTrue(module.enqueue_event(event))
             connection = self._worker_queue_connection(module)
             connection.execute(
@@ -13164,8 +13263,9 @@ print(json.dumps({
 
     def test_burst_projection_retries_audit_without_delivery_authority(self):
         module = self._load_auto_reply_module("auto_reply_burst_projection_retry_test")
+        self._room_is_current(module)
         with tempfile.TemporaryDirectory() as temporary:
-            module.QUEUE = Path(temporary) / "reply-queue.sqlite3"
+            self._point_queue(module, Path(temporary))
             first = self._burst_event(module, 551, "first", 5_500)
             first["recent_messages"] = [self._recent_row(first)]
             second = self._burst_event(
@@ -13180,7 +13280,11 @@ print(json.dumps({
             self.assertTrue(module.enqueue_event(second))
             connection = self._worker_queue_connection(module)
             try:
-                claimed = module.claim_job(time.time(), connection)
+                # Claim once the burst has settled, as the worker does.
+                claimed = module.claim_job(
+                    time.time() + module.BURST_SETTLE_SECONDS + 1,
+                    connection,
+                )
                 self.assertIsNotNone(claimed)
                 job, previous_status = claimed
                 self.assertEqual(previous_status, "projection_pending")
@@ -13239,7 +13343,7 @@ print(json.dumps({
     def test_stale_processing_with_successor_recovers_for_projection(self):
         module = self._load_auto_reply_module("auto_reply_burst_recovery_test")
         with tempfile.TemporaryDirectory() as temporary:
-            module.QUEUE = Path(temporary) / "reply-queue.sqlite3"
+            self._point_queue(module, Path(temporary))
             first = self._burst_event(module, 601, "first", 6_000)
             first["recent_messages"] = [self._recent_row(first)]
             second = self._burst_event(
@@ -13282,7 +13386,7 @@ print(json.dumps({
         )
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            module.QUEUE = root / "reply-queue.sqlite3"
+            self._point_queue(module, root)
             module.CONTEXT_DB = root / "context.sqlite3"
             context = module.sqlite3.connect(module.CONTEXT_DB)
             context.execute(
@@ -13364,7 +13468,7 @@ print(json.dumps({
         )
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            module.QUEUE = root / "reply-queue.sqlite3"
+            self._point_queue(module, root)
             module.CONTEXT_DB = root / "context.sqlite3"
             context = module.sqlite3.connect(module.CONTEXT_DB)
             context.execute(
@@ -13431,7 +13535,7 @@ print(json.dumps({
         )
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            module.QUEUE = root / "reply-queue.sqlite3"
+            self._point_queue(module, root)
             queue = self._worker_queue_connection(module)
             try:
                 queue.execute(
@@ -13515,7 +13619,7 @@ print(json.dumps({
         )
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            module.QUEUE = root / "reply-queue.sqlite3"
+            self._point_queue(module, root)
             queue = self._worker_queue_connection(module)
             try:
                 queue.execute(
@@ -13581,7 +13685,7 @@ print(json.dumps({
             "auto_reply_stale_recovery_post_context_cas_test"
         )
         with tempfile.TemporaryDirectory() as temporary:
-            module.QUEUE = Path(temporary) / "reply-queue.sqlite3"
+            self._point_queue(module, Path(temporary))
             queue = self._worker_queue_connection(module)
             try:
                 queue.execute(
@@ -13646,6 +13750,7 @@ print(json.dumps({
         module = self._load_auto_reply_module(
             "auto_reply_skip_projection_lost_ack_test"
         )
+        self._room_is_current(module)
         event = self._burst_event(module, 9901, "응", int(time.time()))
         job = {
             "event_id": event["event_id"],
@@ -13653,7 +13758,7 @@ print(json.dumps({
         }
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            module.QUEUE = root / "reply-queue.sqlite3"
+            self._point_queue(module, root)
             queue = self._worker_queue_connection(module)
             queue.execute(
                 """
@@ -13761,7 +13866,7 @@ print(json.dumps({
             "auto_reply_sending_skip_projection_test"
         )
         with tempfile.TemporaryDirectory() as temporary:
-            module.QUEUE = Path(temporary) / "reply-queue.sqlite3"
+            self._point_queue(module, Path(temporary))
             queue = self._worker_queue_connection(module)
             try:
                 queue.execute(
@@ -13825,7 +13930,7 @@ print(json.dumps({
             ),
         )
         with tempfile.TemporaryDirectory() as temporary:
-            module.QUEUE = Path(temporary) / "reply-queue.sqlite3"
+            self._point_queue(module, Path(temporary))
             queue = self._worker_queue_connection(module)
             try:
                 for index, (name, context_only, reply, reason, category) in enumerate(
@@ -13935,7 +14040,7 @@ print(json.dumps({
         )
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            module.QUEUE = root / "reply-queue.sqlite3"
+            self._point_queue(module, root)
             module.CONTEXT_DB = root / "context.sqlite3"
             context = module.sqlite3.connect(module.CONTEXT_DB)
             context.execute(
@@ -13990,7 +14095,7 @@ print(json.dumps({
         )
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            module.QUEUE = root / "reply-queue.sqlite3"
+            self._point_queue(module, root)
             module.CONTEXT_DB = root / "context.sqlite3"
             context = module.sqlite3.connect(module.CONTEXT_DB)
             context.execute(
@@ -14057,7 +14162,7 @@ print(json.dumps({
         )
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            module.QUEUE = root / "reply-queue.sqlite3"
+            self._point_queue(module, root)
             module.CONTEXT_DB = root / "context.sqlite3"
             context = module.sqlite3.connect(module.CONTEXT_DB)
             context.execute(
@@ -14153,7 +14258,7 @@ print(json.dumps({
             root.chmod(0o700)
             room = root / "42"
             room.mkdir(mode=0o700)
-            module.QUEUE = room / "reply-queue.sqlite3"
+            self._point_queue(module, room)
             module.WORKER_STATUS = room / "reply-worker-status.json"
             with mock.patch.dict(
                 os.environ,
@@ -14203,7 +14308,7 @@ print(json.dumps({
             root.chmod(0o700)
             room = root / "42"
             room.mkdir(mode=0o700)
-            module.QUEUE = room / "reply-queue.sqlite3"
+            self._point_queue(module, room)
             module.WORKER_STATUS = room / "reply-worker-status.json"
             with mock.patch.dict(
                 os.environ,
@@ -14390,7 +14495,7 @@ print(json.dumps({
             root.chmod(0o700)
             room = root / "42"
             room.mkdir(mode=0o700)
-            module.QUEUE = room / "reply-queue.sqlite3"
+            self._point_queue(module, room)
             module.WORKER_STATUS = room / "reply-worker-status.json"
             with mock.patch.dict(
                 os.environ,
@@ -14538,7 +14643,7 @@ print(json.dumps({
             root.chmod(0o700)
             room = root / "42"
             room.mkdir(mode=0o700)
-            module.QUEUE = room / "reply-queue.sqlite3"
+            self._point_queue(module, room)
             module.WORKER_STATUS = room / "reply-worker-status.json"
             with mock.patch.dict(
                 os.environ,
@@ -14652,6 +14757,7 @@ print(json.dumps({
 
     def test_reply_worker_reopens_after_transient_sqlite_busy(self):
         module = self._load_auto_reply_module("auto_reply_worker_sqlite_busy_test")
+        self._room_is_current(module)
         first_connection = mock.Mock()
         reopened_connection = mock.Mock()
         circuit_connection = mock.Mock()
@@ -14778,7 +14884,7 @@ print(json.dumps({
             root.chmod(0o700)
             room = root / "42"
             room.mkdir(mode=0o700)
-            module.QUEUE = room / "reply-queue.sqlite3"
+            self._point_queue(module, room)
             module.WORKER_STATUS = room / "reply-worker-status.json"
             with mock.patch.dict(
                 os.environ,
@@ -14832,7 +14938,7 @@ print(json.dumps({
             root.chmod(0o700)
             room = root / "42"
             room.mkdir(mode=0o700)
-            module.QUEUE = room / "reply-queue.sqlite3"
+            self._point_queue(module, room)
             module.WORKER_STATUS = room / "reply-worker-status.json"
             with mock.patch.dict(
                 os.environ,
@@ -15186,6 +15292,7 @@ print(json.dumps({
         module = self._load_auto_reply_module(
             "auto_reply_media_unavailable_schedule_test"
         )
+        self._room_is_current(module)
         event = self._media_unavailable_event(module, 920, int(time.time()))
         bundle = {
             "context": [],
@@ -15206,7 +15313,7 @@ print(json.dumps({
             "response_window_upper_seconds": 300.0,
         }
         with tempfile.TemporaryDirectory() as temporary:
-            module.QUEUE = Path(temporary) / "reply-queue.sqlite3"
+            self._point_queue(module, Path(temporary))
             self.assertTrue(module.enqueue_event(event))
             queue = self._worker_queue_connection(module)
             try:
@@ -15283,7 +15390,7 @@ print(json.dumps({
             "response_time": self._timing_stats(module),
         }
         with tempfile.TemporaryDirectory() as temporary:
-            module.QUEUE = Path(temporary) / "reply-queue.sqlite3"
+            self._point_queue(module, Path(temporary))
             self.assertTrue(module.enqueue_event(event))
             queue = self._worker_queue_connection(module)
             try:
@@ -15890,8 +15997,9 @@ print(json.dumps({
         module = self._load_auto_reply_module(
             "auto_reply_delivery_unknown_media_scrub_test"
         )
+        self._room_is_current(module)
         with tempfile.TemporaryDirectory() as temporary:
-            module.QUEUE = Path(temporary) / "reply-queue.sqlite3"
+            self._point_queue(module, Path(temporary))
             with self._owned_image_bundle(module) as media:
                 event = self._burst_event(
                     module, 906, "[사진]", int(time.time()),
@@ -15929,8 +16037,9 @@ print(json.dumps({
         module = self._load_auto_reply_module(
             "auto_reply_author_terminal_media_scrub_test"
         )
+        self._room_is_current(module)
         with tempfile.TemporaryDirectory() as temporary:
-            module.QUEUE = Path(temporary) / "reply-queue.sqlite3"
+            self._point_queue(module, Path(temporary))
             with self._owned_image_bundle(module) as media:
                 event = self._burst_event(
                     module, 907, "[사진]", int(time.time()),
@@ -17667,7 +17776,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
     def test_geeknews_daily_slots_block_repeat_posts(self):
         module = self._load_auto_reply_module("auto_reply_geeknews_slots_test")
         with tempfile.TemporaryDirectory() as temporary:
-            module.QUEUE = Path(temporary) / "reply-queue.sqlite3"
+            self._point_queue(module, Path(temporary))
             morning = datetime(2026, 8, 16, 8, 40, tzinfo=module.GEEKNEWS_SLOT_TZ)
             evening = datetime(2026, 8, 16, 19, 50, tzinfo=module.GEEKNEWS_SLOT_TZ)
             start, end = module._geeknews_slot_window(morning.date(), "morning", 8, 40, 20)
@@ -17690,7 +17799,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
 
         module = self._load_auto_reply_module("auto_reply_geeknews_digest_test")
         with tempfile.TemporaryDirectory() as temporary:
-            module.QUEUE = Path(temporary) / "reply-queue.sqlite3"
+            self._point_queue(module, Path(temporary))
             feed = """
             <feed>
               <entry>
@@ -17725,7 +17834,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
     def test_geeknews_enqueue_does_not_persist_seen_until_confirmed(self):
         module = self._load_auto_reply_module("auto_reply_geeknews_confirm_seen")
         with tempfile.TemporaryDirectory() as temporary:
-            module.QUEUE = Path(temporary) / "reply-queue.sqlite3"
+            self._point_queue(module, Path(temporary))
             feed = """
             <feed>
               <entry>
@@ -17747,7 +17856,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
     def test_geeknews_operator_preview_does_not_persist_seen(self):
         module = self._load_auto_reply_module("auto_reply_geeknews_operator_preview")
         with tempfile.TemporaryDirectory() as temporary:
-            module.QUEUE = Path(temporary) / "reply-queue.sqlite3"
+            self._point_queue(module, Path(temporary))
             feed = """
             <feed>
               <entry>
@@ -17918,7 +18027,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
         os.environ["OPENKAKAO_TARGET_CHAT_ID"] = "42"
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            module.QUEUE = root / "42" / "reply-queue.sqlite3"
+            self._point_queue(module, root / "42")
             queue = self._worker_queue_connection(module)
             try:
                 queue.execute(
@@ -17956,7 +18065,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
         os.environ["OPENKAKAO_TARGET_CHAT_ID"] = "42"
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            module.QUEUE = root / "42" / "reply-queue.sqlite3"
+            self._point_queue(module, root / "42")
             queue = self._worker_queue_connection(module)
             try:
                 due = time.time() + 120.0
@@ -18004,7 +18113,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
         os.environ["OPENKAKAO_TARGET_CHAT_ID"] = "42"
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            module.QUEUE = root / "42" / "reply-queue.sqlite3"
+            self._point_queue(module, root / "42")
             queue = self._worker_queue_connection(module)
             try:
                 queue.execute(
@@ -18046,7 +18155,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
         os.environ["OPENKAKAO_TARGET_CHAT_ID"] = "42"
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            module.QUEUE = root / "42" / "reply-queue.sqlite3"
+            self._point_queue(module, root / "42")
             queue = self._worker_queue_connection(module)
             try:
                 queue.execute(
@@ -18094,7 +18203,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
         os.environ["OPENKAKAO_TARGET_CHAT_ID"] = "42"
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            module.QUEUE = root / "42" / "reply-queue.sqlite3"
+            self._point_queue(module, root / "42")
             queue = self._worker_queue_connection(module)
             try:
                 queue.execute(
@@ -18132,7 +18241,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
         os.environ["OPENKAKAO_TARGET_CHAT_ID"] = "42"
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            module.QUEUE = root / "42" / "reply-queue.sqlite3"
+            self._point_queue(module, root / "42")
             module.QUEUE.parent.mkdir(parents=True)
             queue = self._worker_queue_connection(module)
             try:
@@ -18170,7 +18279,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
         os.environ["OPENKAKAO_TARGET_CHAT_ID"] = "42"
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            module.QUEUE = root / "42" / "reply-queue.sqlite3"
+            self._point_queue(module, root / "42")
             queue = self._worker_queue_connection(module)
             try:
                 now = time.time()
@@ -18219,7 +18328,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
         os.environ["OPENKAKAO_TARGET_CHAT_ID"] = "42"
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            module.QUEUE = root / "42" / "reply-queue.sqlite3"
+            self._point_queue(module, root / "42")
             queue = self._worker_queue_connection(module)
             try:
                 queue.execute(
@@ -18259,7 +18368,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
         event = {"chat_id": 42, "log_id": 11, "author_nickname": "현준"}
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            module.QUEUE = root / "42" / "reply-queue.sqlite3"
+            self._point_queue(module, root / "42")
             queue = self._worker_queue_connection(module)
             try:
                 queue.execute(
@@ -18309,7 +18418,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
         event = {"chat_id": 42, "log_id": 11, "author_nickname": "현준", "is_self": False}
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            module.QUEUE = root / "42" / "reply-queue.sqlite3"
+            self._point_queue(module, root / "42")
             queue = self._worker_queue_connection(module)
             try:
                 now = time.time()
@@ -18397,7 +18506,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
         }
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            module.QUEUE = root / "42" / "reply-queue.sqlite3"
+            self._point_queue(module, root / "42")
             queue = self._worker_queue_connection(module)
             try:
                 queue.execute(
@@ -18467,7 +18576,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
         }
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            module.QUEUE = root / "42" / "reply-queue.sqlite3"
+            self._point_queue(module, root / "42")
             queue = self._worker_queue_connection(module)
             try:
                 now = time.time()
@@ -18550,7 +18659,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
         }
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            module.QUEUE = root / "42" / "reply-queue.sqlite3"
+            self._point_queue(module, root / "42")
             queue = self._worker_queue_connection(module)
             try:
                 now = time.time()
@@ -18623,7 +18732,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
         event = {"chat_id": 42, "log_id": 11, "author_nickname": "현준"}
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            module.QUEUE = root / "42" / "reply-queue.sqlite3"
+            self._point_queue(module, root / "42")
             queue = self._worker_queue_connection(module)
             try:
                 queue.execute(
@@ -18668,7 +18777,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
         }
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            module.QUEUE = root / "42" / "reply-queue.sqlite3"
+            self._point_queue(module, root / "42")
             queue = self._worker_queue_connection(module)
             try:
                 queue.execute(
@@ -18724,7 +18833,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
         }
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            module.QUEUE = root / "42" / "reply-queue.sqlite3"
+            self._point_queue(module, root / "42")
             queue = self._worker_queue_connection(module)
             try:
                 queue.execute(
@@ -18776,7 +18885,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
         }
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            module.QUEUE = root / "42" / "reply-queue.sqlite3"
+            self._point_queue(module, root / "42")
             queue = self._worker_queue_connection(module)
             try:
                 queue.execute(
@@ -18812,6 +18921,8 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
 
     def test_proactive_process_job_defines_analysis_event(self):
         module = self._load_auto_reply_module("auto_reply_proactive_analysis_event")
+        self.enterContext(mock.patch.object(module, "_geeknews_slot_at", return_value="in-slot"))
+        self._room_is_current(module)
         previous = os.environ.get("OPENKAKAO_TARGET_CHAT_ID")
         os.environ["OPENKAKAO_TARGET_CHAT_ID"] = "42"
         event = self._burst_event(module, 120, "세금 일정 업데이트\nhttps://example.test/tax", 5_100)
@@ -18828,7 +18939,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
         }
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            module.QUEUE = root / "42" / "reply-queue.sqlite3"
+            self._point_queue(module, root / "42")
             queue = self._worker_queue_connection(module)
             try:
                 queue.execute(
@@ -18895,7 +19006,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
         }
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            module.QUEUE = root / "42" / "reply-queue.sqlite3"
+            self._point_queue(module, root / "42")
             queue = self._worker_queue_connection(module)
             try:
                 queue.execute(
@@ -18931,6 +19042,8 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
 
     def test_proactive_process_job_schedules_without_response_time_stats(self):
         module = self._load_auto_reply_module("auto_reply_proactive_no_response_time")
+        self.enterContext(mock.patch.object(module, "_geeknews_slot_at", return_value="in-slot"))
+        self._room_is_current(module)
         previous = os.environ.get("OPENKAKAO_TARGET_CHAT_ID")
         os.environ["OPENKAKAO_TARGET_CHAT_ID"] = "42"
         event = self._burst_event(
@@ -18950,7 +19063,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
         }
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            module.QUEUE = root / "42" / "reply-queue.sqlite3"
+            self._point_queue(module, root / "42")
             module.EVIDENCE_LEDGER = root / "evidence.jsonl"
             queue = self._worker_queue_connection(module)
             try:
@@ -19065,7 +19178,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
         try:
             with tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
-                module.QUEUE = root / "42" / "reply-queue.sqlite3"
+                self._point_queue(module, root / "42")
                 module.EVIDENCE_LEDGER = root / "evidence.jsonl"
                 connection = self._worker_queue_connection(module)
                 try:
@@ -19154,6 +19267,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
 
     def test_scheduled_lenient_policy_fallback_is_not_strict_policy_skipped(self):
         module = self._load_auto_reply_module("auto_reply_lenient_scheduled_policy")
+        self._room_is_current(module)
         previous = os.environ.get("OPENKAKAO_TARGET_CHAT_ID")
         os.environ["OPENKAKAO_TARGET_CHAT_ID"] = "42"
         now = int(time.time())
@@ -19164,11 +19278,13 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
         event["canonical_event_id"] = "db:42:1787182399"
         event["rerank_fallback"] = "lenient_policy"
         event["response_window_upper_seconds"] = 600.0
+        # Analysis ran at the room tail, as production records when it schedules.
+        event["analysis_watermark_log_id"] = event["log_id"]
         reply_text = "잘 쉬어"
         try:
             with tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
-                module.QUEUE = root / "42" / "reply-queue.sqlite3"
+                self._point_queue(module, root / "42")
                 module.EVIDENCE_LEDGER = root / "evidence.jsonl"
                 connection = self._worker_queue_connection(module)
                 try:
@@ -19412,7 +19528,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
         }
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            module.QUEUE = root / "42" / "reply-queue.sqlite3"
+            self._point_queue(module, root / "42")
             queue = self._worker_queue_connection(module)
             try:
                 queue.execute(
@@ -19507,6 +19623,10 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
 
     def test_closed_slot_pending_geeknews_skips_without_send(self):
         module = self._load_auto_reply_module("auto_reply_geeknews_closed_slot")
+        # The no-send audit is the proof of a skip; its store read-back is not
+        # hermetic, so the audit is taken as durable here (as other skip tests do).
+        self.enterContext(mock.patch.object(module, "durable_policy_skip", return_value=True))
+        self._room_is_current(module)
         previous = os.environ.get("OPENKAKAO_TARGET_CHAT_ID")
         os.environ["OPENKAKAO_TARGET_CHAT_ID"] = "42"
         digest = "GeekNews TOP5 · closed slot"
@@ -19520,7 +19640,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
         try:
             with tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
-                module.QUEUE = root / "42" / "reply-queue.sqlite3"
+                self._point_queue(module, root / "42")
                 module.EVIDENCE_LEDGER = root / "evidence.jsonl"
                 connection = self._worker_queue_connection(module)
                 try:
@@ -19592,6 +19712,10 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
 
     def test_lexical_overlay_recalls_room_keyword_without_shared_vector(self):
         module = self._load_auto_reply_module("auto_reply_lexical_overlay")
+        self._room_is_current(module)
+        # The worker resolves its CLI from the operator's installed app when
+        # BIN is not pinned; this test has no installed app.
+        module.BIN = Path(__file__)
         inbound = "어제 번호 이야기해줫던거 머더라"
         event = {
             "chat_id": 417780809780519,
@@ -20063,7 +20187,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary); root.chmod(0o700)
             room = root / "42"; room.mkdir(mode=0o700)
-            module.QUEUE = room / "reply-queue.sqlite3"
+            self._point_queue(module, room)
             with mock.patch.dict(os.environ, {module.TARGET_CHAT_ID_ENV: "42"}, clear=False):
                 queue = self._worker_queue_connection(module)
                 now = time.time()
@@ -20112,7 +20236,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary); root.chmod(0o700)
             room = root / "417780809780519"; room.mkdir(mode=0o700)
-            module.QUEUE = room / "reply-queue.sqlite3"
+            self._point_queue(module, room)
             with mock.patch.dict(os.environ, {module.TARGET_CHAT_ID_ENV: "417780809780519"}, clear=False):
                 queue = self._worker_queue_connection(module)
                 try:
@@ -20129,7 +20253,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary); root.chmod(0o700)
             room = root / "42"; room.mkdir(mode=0o700)
-            module.QUEUE = room / "reply-queue.sqlite3"
+            self._point_queue(module, room)
             with mock.patch.dict(os.environ, {module.TARGET_CHAT_ID_ENV: "42"}, clear=False):
                 queue = self._worker_queue_connection(module)
                 try:
