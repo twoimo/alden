@@ -196,27 +196,39 @@ impl FailingRig {
 
 // --- senders ---
 
-/// A sender that returns a fixed outcome and records each (chat_id, body) it is
-/// asked to send.
+/// A sender that returns a fixed outcome (or `first` for its first send only)
+/// and records each (chat_id, body, image count) it is asked to send.
 struct RecordingSender {
+    first: RefCell<Option<RelaySendOutcome>>,
     outcome: RelaySendOutcome,
-    sends: RefCell<Vec<(i64, String)>>,
+    sends: RefCell<Vec<(i64, String, usize)>>,
 }
 impl RecordingSender {
     fn new(outcome: RelaySendOutcome) -> Self {
         Self {
+            first: RefCell::new(None),
             outcome,
             sends: RefCell::new(Vec::new()),
         }
+    }
+    fn first_then(first: RelaySendOutcome, later: RelaySendOutcome) -> Self {
+        let sender = Self::new(later);
+        *sender.first.borrow_mut() = Some(first);
+        sender
     }
     fn count(&self) -> usize {
         self.sends.borrow().len()
     }
 }
 impl RelaySender for RecordingSender {
-    fn send_relay(&self, chat_id: i64, text: &str, _images: &[ImageBlob]) -> RelaySendOutcome {
-        self.sends.borrow_mut().push((chat_id, text.to_string()));
-        self.outcome.clone()
+    fn send_relay(&self, chat_id: i64, text: &str, images: &[ImageBlob]) -> RelaySendOutcome {
+        self.sends
+            .borrow_mut()
+            .push((chat_id, text.to_string(), images.len()));
+        self.first
+            .borrow_mut()
+            .take()
+            .unwrap_or_else(|| self.outcome.clone())
     }
 }
 
@@ -380,15 +392,16 @@ proptest! {
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(200))]
 
-    /// Property 19: for a source message carrying 0..=20 images and a sender
-    /// that confirms `delivered` of them, the relay settles as `Committed`
-    /// exactly when every source image was delivered and none was dropped over
-    /// the per-message cap of 10; otherwise it is a miss. A miss keeps the
-    /// cursor pinned and retries (`MissRetrying`) until three consecutive
-    /// mismatches settle it as `MissFinal`, at which point the cursor advances
-    /// and the message is never recorded as delivered (retryable throughout).
-    /// The tally always reports source vs delivered so the missing count is
-    /// explicit (R7.2, R7.7, R7.8, R7.18, R12.6).
+    /// Property 19: for a source message carrying 0..=20 images, the images
+    /// over the per-message cap of 10 are dropped and never sent, and a sender
+    /// that confirms `delivered` of the capped images on its first send (and
+    /// none on any retry) settles the message as `Committed` exactly when every
+    /// capped image arrived; otherwise it is a miss. A miss keeps the cursor
+    /// pinned and retries (`MissRetrying`) only the missing images, never the
+    /// text, until three consecutive mismatches settle it as `MissFinal`, at
+    /// which point the cursor advances and the message is never recorded as
+    /// delivered. The tally always reports capped vs delivered so the missing
+    /// count is explicit (R7.2, R7.7, R7.8, R7.18, R12.6).
     ///
     /// Validates: Requirements 7.2, 7.7, 7.8, 7.18, 12.6
     #[test]
@@ -396,13 +409,10 @@ proptest! {
         source in 0usize..=20,
         delivered_raw in 0usize..=20,
     ) {
-        // A realistic sender delivers no more than the capped, source-bounded
-        // count.
-        let delivered = delivered_raw.min(source).min(MAX_IMAGES);
-        let dropped = source.saturating_sub(MAX_IMAGES);
-        // The relay's commit rule: every source image delivered AND nothing
-        // dropped over the cap.
-        let complete = delivered == source && dropped == 0;
+        let capped = source.min(MAX_IMAGES);
+        // A realistic sender delivers no more than it was given.
+        let delivered = delivered_raw.min(capped);
+        let complete = delivered == capped;
 
         let mut m = text_msg("m1", 1, 0, "with images");
         m.images = (0..source).map(img_ref).collect();
@@ -411,9 +421,12 @@ proptest! {
         let clock = VirtualClock::new(0);
         let rig = AcquiringRig::new(clock.clone());
         let ladder = rig.ladder();
-        let sender = RecordingSender::new(RelaySendOutcome::Sent {
-            images_delivered: delivered,
-        });
+        let sender = RecordingSender::first_then(
+            RelaySendOutcome::Sent {
+                images_delivered: delivered,
+            },
+            RelaySendOutcome::Sent { images_delivered: 0 },
+        );
         let store = SqliteRelayStore::open_in_memory().unwrap();
         let journal = SqliteHistoryStore::open_in_memory().unwrap();
         let trip = Tripwires::new();
@@ -428,8 +441,8 @@ proptest! {
             let outcome = &tick.processed[0];
             match &outcome.settlement {
                 Settlement::Committed(tally) => {
-                    prop_assert_eq!(tally.source, source);
-                    prop_assert_eq!(tally.delivered, source);
+                    prop_assert_eq!(tally.source, capped);
+                    prop_assert_eq!(tally.delivered, capped);
                     prop_assert!(tally.is_complete());
                 }
                 other => prop_assert!(false, "expected committed, got {other:?}"),
@@ -445,11 +458,10 @@ proptest! {
                 let outcome = &tick.processed[0];
                 match &outcome.settlement {
                     Settlement::MissRetrying(tally) => {
-                        prop_assert_eq!(tally.source, source);
-                        // The missing count is (source − delivered), always
-                        // explicit (R12.6).
-                        prop_assert_eq!(tally.missing(), source - tally.delivered);
-                        prop_assert!(!tally.is_complete());
+                        prop_assert_eq!(tally.source, capped);
+                        // The missing count is explicit (R12.6).
+                        prop_assert_eq!(tally.delivered, delivered);
+                        prop_assert_eq!(tally.missing(), capped - delivered);
                     }
                     other => prop_assert!(false, "expected retrying, got {other:?}"),
                 }
@@ -461,7 +473,7 @@ proptest! {
             let outcome = &tick.processed[0];
             match &outcome.settlement {
                 Settlement::MissFinal(tally) => {
-                    prop_assert_eq!(tally.source, source);
+                    prop_assert_eq!(tally.source, capped);
                     prop_assert!(!tally.is_complete());
                 }
                 other => prop_assert!(false, "expected final miss, got {other:?}"),
@@ -470,6 +482,15 @@ proptest! {
             // so the message stays retryable in principle (R7.18).
             prop_assert_eq!(relay.cursor().last_at, 1);
             prop_assert!(!store.is_delivered(10, &pid_hash).unwrap());
+        }
+
+        // The text goes exactly once; each retry carries only the images still
+        // missing (R7.8).
+        let sends = sender.sends.borrow();
+        prop_assert_eq!(sends.iter().filter(|(_, text, _)| !text.is_empty()).count(), 1);
+        prop_assert_eq!(sends[0].2, capped);
+        for (_, _, images) in sends.iter().skip(1) {
+            prop_assert_eq!(*images, capped - delivered);
         }
 
         // Relay events stay redacted.

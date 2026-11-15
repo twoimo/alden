@@ -14,11 +14,13 @@
 //!   [`Settlement::MissFinal`]; a [`Settlement::MissRetrying`] leaves the cursor
 //!   in place, so the confirmed-send sequence is always a subsequence of the
 //!   original time order.
-//! * **Retry an image mismatch, then give up after three (R7.8, R7.18).**
-//!   An image-count mismatch keeps the cursor pinned, so the next tick
-//!   re-acquires every image and re-sends the whole message to each room not
-//!   yet marked delivered; three consecutive mismatches settle the message as
-//!   [`Settlement::MissFinal`] and the cursor advances.
+//! * **Retry only the missing images, then give up (R7.8, R7.18).**
+//!   An image-count mismatch keeps the cursor pinned, and the next tick sends
+//!   each room only the images it is still missing, never the text again
+//!   ([`RoomProgress`]). Three consecutive mismatches, or a retry more than
+//!   [`MISS_RETRY_WINDOW_MS`] after the first one, settle the message as
+//!   [`Settlement::MissFinal`] and the cursor advances. Images over
+//!   [`MAX_IMAGES`] are dropped and reported, so they never block completion.
 //! * **Deliver each (message, room) at most once (R7.10, R12.7).** The
 //!   [`RelayLedger`] records a confirmed delivery keyed by `(chat_id,
 //!   provenance-hashed message id)`, so an app restart, AX reconnect, or retry
@@ -57,6 +59,9 @@ pub const MAX_IMAGES: usize = 10;
 /// How many consecutive image-count mismatches settle a message as a final miss
 /// (R7.18).
 pub const MISMATCH_STREAK_LIMIT: u8 = 3;
+/// Missing images are retried only within this long after the first mismatch;
+/// a later attempt settles the message as a final miss (R7.8).
+pub const MISS_RETRY_WINDOW_MS: i64 = 30_000;
 /// How long the relay waits to confirm the AX notification subscription before
 /// switching to polling, in milliseconds (R7.13).
 pub const NOTIFICATION_CONFIRM_MS: i64 = 5_000;
@@ -232,27 +237,57 @@ fn db_err(e: rusqlite::Error) -> LedgerError {
     LedgerError::Backend(e.to_string())
 }
 
-/// Records confirmed deliveries and image-mismatch streaks so each (message,
-/// room) is relayed at most once (R7.10) and a message settles as a final miss
-/// after three consecutive mismatches (R7.18).
+/// What one room has already received of one message, so a retry sends only
+/// what is still missing (R7.8) and a delivered message is never sent again
+/// (R7.10).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RoomProgress {
+    /// The whole message reached the room.
+    pub settled: bool,
+    /// The text and links reached the room, so a retry carries images only.
+    pub text_sent: bool,
+    /// Bit `i` is set once image `i` (in message order, under the
+    /// [`MAX_IMAGES`] cap) reached the room.
+    pub images_sent: u16,
+    /// Consecutive image-count mismatches (R7.18).
+    pub mismatch_streak: u8,
+    /// When the first mismatch happened; the retry window starts here (R7.8).
+    pub first_miss_at: Option<i64>,
+}
+
+const _: () = assert!(MAX_IMAGES <= u16::BITS as usize);
+
+/// Records what each (message, room) has received, so each is relayed at most
+/// once (R7.10), a retry sends only the missing images (R7.8), and a message
+/// settles as a final miss after three consecutive mismatches (R7.18).
 ///
 /// Keys are the provenance-hashed message id, so no raw Telegram identifier is
 /// persisted (R7.16). Every method reports a store failure as an error, never as
 /// "not delivered", so the relay can hold instead of sending twice.
 pub trait RelayLedger {
-    /// Whether `message_pid` has been confirmed as delivered to `chat_id`.
-    fn is_delivered(&self, chat_id: i64, message_pid: &str) -> Result<bool, LedgerError>;
+    /// What `chat_id` has received of `message_pid` so far.
+    fn progress(&self, chat_id: i64, message_pid: &str) -> Result<RoomProgress, LedgerError>;
 
-    /// Record a confirmed delivery. Only a fully-delivered (message, room) is
-    /// ever marked, so an image mismatch stays retryable (R7.8, R7.10).
+    /// Record a confirmed delivery of the whole message (R7.10).
     fn mark(&self, chat_id: i64, message_pid: &str, at: i64) -> Result<(), LedgerError>;
 
-    /// The current consecutive image-mismatch streak for a (message, room).
-    fn mismatch_streak(&self, chat_id: i64, message_pid: &str) -> Result<u8, LedgerError>;
+    /// Record one more consecutive mismatch at `at`, folding in what this
+    /// attempt delivered, and return the updated progress. The streak stops at
+    /// [`MISMATCH_STREAK_LIMIT`] and the first mismatch's time is kept (R7.8,
+    /// R7.18).
+    fn record_miss(
+        &self,
+        chat_id: i64,
+        message_pid: &str,
+        text_sent: bool,
+        images_sent: u16,
+        at: i64,
+    ) -> Result<RoomProgress, LedgerError>;
 
-    /// Increment and return the mismatch streak for a (message, room), capped at
-    /// [`MISMATCH_STREAK_LIMIT`] (R7.18).
-    fn bump_mismatch(&self, chat_id: i64, message_pid: &str) -> Result<u8, LedgerError>;
+    /// Whether `message_pid` has been confirmed as delivered to `chat_id`.
+    fn is_delivered(&self, chat_id: i64, message_pid: &str) -> Result<bool, LedgerError> {
+        Ok(self.progress(chat_id, message_pid)?.settled)
+    }
 }
 
 /// Loads and stores the per-pair [`RelayCursor`] (R7.1). Kept separate so the
@@ -293,7 +328,7 @@ impl SqliteRelayStore {
 
 /// Create the `relay_cursor` and `relay_ledger` tables if absent (R7 schema).
 pub fn ensure_relay_schema(conn: &Connection) -> Result<(), LedgerError> {
-    conn.execute_batch(
+    conn.execute_batch(&format!(
         "CREATE TABLE IF NOT EXISTS relay_cursor(
             pair_key TEXT PRIMARY KEY,
             last_at INTEGER NOT NULL,
@@ -304,28 +339,40 @@ pub fn ensure_relay_schema(conn: &Connection) -> Result<(), LedgerError> {
             id INTEGER PRIMARY KEY,
             chat_id INTEGER NOT NULL,
             message_pid TEXT NOT NULL,
-            mismatch_streak INTEGER NOT NULL DEFAULT 0 CHECK(mismatch_streak <= 3),
+            mismatch_streak INTEGER NOT NULL DEFAULT 0
+                CHECK(mismatch_streak <= {MISMATCH_STREAK_LIMIT}),
             settled INTEGER NOT NULL DEFAULT 0,
+            text_sent INTEGER NOT NULL DEFAULT 0,
+            images_sent INTEGER NOT NULL DEFAULT 0,
+            first_miss_at INTEGER,
             at INTEGER NOT NULL,
             UNIQUE(chat_id, message_pid)
         );
         CREATE INDEX IF NOT EXISTS idx_relay_ledger_msg
-            ON relay_ledger(chat_id, message_pid);",
-    )
+            ON relay_ledger(chat_id, message_pid);"
+    ))
     .map_err(db_err)
 }
 
 impl RelayLedger for SqliteRelayStore {
-    fn is_delivered(&self, chat_id: i64, message_pid: &str) -> Result<bool, LedgerError> {
+    fn progress(&self, chat_id: i64, message_pid: &str) -> Result<RoomProgress, LedgerError> {
         self.conn
             .query_row(
-                "SELECT 1 FROM relay_ledger
-                 WHERE chat_id = ?1 AND message_pid = ?2 AND settled = 1",
+                "SELECT settled, text_sent, images_sent, mismatch_streak, first_miss_at
+                 FROM relay_ledger WHERE chat_id = ?1 AND message_pid = ?2",
                 params![chat_id, message_pid],
-                |_| Ok(()),
+                |row| {
+                    Ok(RoomProgress {
+                        settled: row.get(0)?,
+                        text_sent: row.get(1)?,
+                        images_sent: row.get(2)?,
+                        mismatch_streak: row.get(3)?,
+                        first_miss_at: row.get(4)?,
+                    })
+                },
             )
             .optional()
-            .map(|row| row.is_some())
+            .map(Option::unwrap_or_default)
             .map_err(db_err)
     }
 
@@ -343,34 +390,37 @@ impl RelayLedger for SqliteRelayStore {
         Ok(())
     }
 
-    fn mismatch_streak(&self, chat_id: i64, message_pid: &str) -> Result<u8, LedgerError> {
-        let streak: Option<i64> = self
-            .conn
-            .query_row(
-                "SELECT mismatch_streak FROM relay_ledger
-                 WHERE chat_id = ?1 AND message_pid = ?2",
-                params![chat_id, message_pid],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(db_err)?;
-        Ok(streak.unwrap_or(0).clamp(0, MISMATCH_STREAK_LIMIT as i64) as u8)
-    }
-
-    fn bump_mismatch(&self, chat_id: i64, message_pid: &str) -> Result<u8, LedgerError> {
-        // Insert at 1 on first miss, otherwise bump but never past the CHECK
-        // ceiling of 3 (R7.18).
+    fn record_miss(
+        &self,
+        chat_id: i64,
+        message_pid: &str,
+        text_sent: bool,
+        images_sent: u16,
+        at: i64,
+    ) -> Result<RoomProgress, LedgerError> {
+        // The streak stops at the CHECK ceiling (R7.18).
         self.conn
             .execute(
-                "INSERT INTO relay_ledger(chat_id, message_pid, mismatch_streak, settled, at)
-                 VALUES (?1, ?2, 1, 0, ?3)
+                "INSERT INTO relay_ledger(chat_id, message_pid, mismatch_streak, settled,
+                                          text_sent, images_sent, first_miss_at, at)
+                 VALUES (?1, ?2, 1, 0, ?3, ?4, ?5, ?5)
                  ON CONFLICT(chat_id, message_pid) DO UPDATE SET
-                    mismatch_streak = MIN(mismatch_streak + 1, 3),
+                    mismatch_streak = MIN(mismatch_streak + 1, ?6),
+                    text_sent = MAX(text_sent, excluded.text_sent),
+                    images_sent = images_sent | excluded.images_sent,
+                    first_miss_at = COALESCE(first_miss_at, excluded.first_miss_at),
                     at = excluded.at",
-                params![chat_id, message_pid, 0_i64],
+                params![
+                    chat_id,
+                    message_pid,
+                    text_sent,
+                    images_sent,
+                    at,
+                    MISMATCH_STREAK_LIMIT
+                ],
             )
             .map_err(db_err)?;
-        self.mismatch_streak(chat_id, message_pid)
+        self.progress(chat_id, message_pid)
     }
 }
 
@@ -440,7 +490,10 @@ pub enum RelaySendOutcome {
 /// [`RelaySendOutcome::Fenced`] and performs no send. Tests inject a scripted
 /// sender so no real KakaoTalk send happens.
 pub trait RelaySender {
-    /// Authorize and send `text` with `images` to `chat_id`.
+    /// Authorize and send `text` with `images` to `chat_id`. `text` is empty on
+    /// a retry that carries only missing images. In
+    /// [`RelaySendOutcome::Sent`], `images_delivered` counts how many of
+    /// `images`, from the first, reached the room.
     fn send_relay(&self, chat_id: i64, text: &str, images: &[ImageBlob]) -> RelaySendOutcome;
 }
 
@@ -451,13 +504,14 @@ pub trait RelaySender {
 /// message is retried (R7.9).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Settlement {
-    /// Every source image was delivered to every target room.
+    /// Every image under the cap was delivered to every target room.
     Committed(ImageTally),
-    /// The image counts disagree; the cursor stays put so the whole message is
-    /// retried on the next tick (R7.8).
+    /// The image counts disagree; the cursor stays put so the missing images
+    /// are retried on the next tick (R7.8).
     MissRetrying(ImageTally),
-    /// Three consecutive mismatches (or an undeliverable target) — the miss is
-    /// final and the cursor advances (R7.18).
+    /// Three consecutive mismatches, the retry window passed, or an
+    /// undeliverable target. The miss is final and the cursor advances (R7.8,
+    /// R7.18).
     MissFinal(ImageTally),
 }
 
@@ -732,29 +786,27 @@ impl<'a> TelegramRelay<'a> {
         let excluded = message.excluded.clone();
 
         // Images: cap at MAX_IMAGES and count the overflow as dropped (R7.2).
-        // Parity compares against the full source count (R7.7).
-        let source_images = message.images.len();
-        let dropped_images = source_images.saturating_sub(MAX_IMAGES);
-        let mut blobs = Vec::new();
-        for image in message.images.iter().take(MAX_IMAGES) {
-            let outcome = self.ladder.acquire(image, self.screen_recording_granted);
-            if let Some(blob) = outcome.acquired {
-                blobs.push(blob);
-            }
-        }
+        // Parity is against the capped images: the overflow is never sent, so
+        // it cannot keep the message from completing (R7.7).
+        let targets = &message.images[..message.images.len().min(MAX_IMAGES)];
+        let dropped_images = message.images.len() - targets.len();
+        let all_images = ((1_u32 << targets.len()) - 1) as u16;
+        // Each image is acquired at most once per tick, and only if some room
+        // still misses it.
+        let mut acquired: Vec<Option<Option<ImageBlob>>> = vec![None; targets.len()];
 
         let body = render_body(&message.text, &rendered_links);
-        let nothing_to_send = body.is_empty() && source_images == 0;
+        let nothing_to_send = body.is_empty() && targets.is_empty();
 
         let mut all_delivered = true; // every room fully delivered (or already)
         let mut retrying = false; // some room has a retryable image miss
-        let mut delivered_min = source_images; // worst delivered across sent rooms
-        let mut saw_send = false;
+        let mut delivered_min = targets.len(); // worst delivered across rooms
 
         for &room in &self.pair.kakao_rooms {
+            let progress = self.ledger.progress(room, &pid_hash)?;
             // Dedup: an already-delivered (message, room) is never re-sent
             // (R7.10). It counts as delivered for this message.
-            if self.ledger.is_delivered(room, &pid_hash)? {
+            if progress.settled {
                 continue;
             }
 
@@ -765,40 +817,78 @@ impl<'a> TelegramRelay<'a> {
                 continue;
             }
 
-            match self.sender.send_relay(room, &body, &blobs) {
-                RelaySendOutcome::Sent { images_delivered } => {
-                    saw_send = true;
-                    delivered_min = delivered_min.min(images_delivered);
-                    let complete = images_delivered == source_images && dropped_images == 0;
-                    if complete {
-                        self.ledger.mark(room, &pid_hash, self.clock.now_ms())?;
-                    } else {
-                        all_delivered = false;
-                        let streak = self.ledger.bump_mismatch(room, &pid_hash)?;
-                        if streak < MISMATCH_STREAK_LIMIT {
-                            retrying = true;
+            // Send only what this room still misses: the text once, then the
+            // images not yet delivered (R7.8).
+            let text = if progress.text_sent {
+                ""
+            } else {
+                body.as_str()
+            };
+            let mut indices = Vec::new();
+            let mut blobs = Vec::new();
+            for (i, image) in targets.iter().enumerate() {
+                if progress.images_sent & (1 << i) != 0 {
+                    continue;
+                }
+                let blob = acquired[i].get_or_insert_with(|| {
+                    self.ladder
+                        .acquire(image, self.screen_recording_granted)
+                        .acquired
+                });
+                if let Some(blob) = blob {
+                    indices.push(i);
+                    blobs.push(blob.clone());
+                }
+            }
+
+            let mut text_sent = progress.text_sent;
+            let mut images_sent = progress.images_sent;
+            // With the text already sent and no missing image acquired, there is
+            // nothing to send; the attempt still counts as a mismatch.
+            if !text.is_empty() || !blobs.is_empty() {
+                match self.sender.send_relay(room, text, &blobs) {
+                    RelaySendOutcome::Sent { images_delivered } => {
+                        text_sent = true;
+                        for &i in indices.iter().take(images_delivered) {
+                            images_sent |= 1 << i;
                         }
                     }
+                    // Fenced rooms never receive a send (R7.15). Neither fencing
+                    // nor a failed send is an image miss, so neither triggers a
+                    // retry.
+                    RelaySendOutcome::Fenced { .. } | RelaySendOutcome::Failed { .. } => {
+                        all_delivered = false;
+                        delivered_min = 0;
+                        continue;
+                    }
                 }
-                // Fenced rooms never receive a send (R7.15). Neither fencing nor
-                // a failed send is an image miss, so neither triggers a retry.
-                RelaySendOutcome::Fenced { .. } | RelaySendOutcome::Failed { .. } => {
-                    all_delivered = false;
-                    delivered_min = 0;
-                }
+            }
+
+            if images_sent == all_images && text_sent {
+                self.ledger.mark(room, &pid_hash, self.clock.now_ms())?;
+                continue;
+            }
+            all_delivered = false;
+            delivered_min = delivered_min.min(images_sent.count_ones() as usize);
+            let now = self.clock.now_ms();
+            let progress = self
+                .ledger
+                .record_miss(room, &pid_hash, text_sent, images_sent, now)?;
+            let within_window = progress
+                .first_miss_at
+                .is_none_or(|first| now.saturating_sub(first) < MISS_RETRY_WINDOW_MS);
+            if progress.mismatch_streak < MISMATCH_STREAK_LIMIT && within_window {
+                retrying = true;
             }
         }
 
-        let delivered = if all_delivered {
-            source_images
-        } else if saw_send {
-            delivered_min
-        } else {
-            0
-        };
         let tally = ImageTally {
-            source: source_images,
-            delivered,
+            source: targets.len(),
+            delivered: if all_delivered {
+                targets.len()
+            } else {
+                delivered_min
+            },
         };
 
         let (settlement, status, code) = if retrying {
@@ -1024,6 +1114,41 @@ mod tests {
         }
     }
 
+    /// Answers each send with the next scripted outcome (the last one repeats)
+    /// and records the text and image count of every send it receives.
+    struct SequenceSender {
+        outcomes: RefCell<VecDeque<RelaySendOutcome>>,
+        calls: RefCell<Vec<(String, usize)>>,
+    }
+    impl SequenceSender {
+        fn new(outcomes: Vec<RelaySendOutcome>) -> Self {
+            Self {
+                outcomes: RefCell::new(outcomes.into()),
+                calls: RefCell::new(Vec::new()),
+            }
+        }
+        fn calls(&self) -> Vec<(String, usize)> {
+            self.calls.borrow().clone()
+        }
+    }
+    impl RelaySender for SequenceSender {
+        fn send_relay(&self, _chat_id: i64, text: &str, images: &[ImageBlob]) -> RelaySendOutcome {
+            self.calls
+                .borrow_mut()
+                .push((text.to_string(), images.len()));
+            let mut outcomes = self.outcomes.borrow_mut();
+            if outcomes.len() > 1 {
+                outcomes.pop_front().unwrap()
+            } else {
+                outcomes[0].clone()
+            }
+        }
+    }
+
+    fn sent(images_delivered: usize) -> RelaySendOutcome {
+        RelaySendOutcome::Sent { images_delivered }
+    }
+
     fn pair(rooms: &[i64]) -> RelayPair {
         RelayPair {
             telegram: TelegramChatRef { id: "tg-1".into() },
@@ -1122,11 +1247,27 @@ mod tests {
     #[test]
     fn ledger_bump_mismatch_caps_at_three() {
         let store = SqliteRelayStore::open_in_memory().unwrap();
-        assert_eq!(store.mismatch_streak(1, "pid").unwrap(), 0);
-        assert_eq!(store.bump_mismatch(1, "pid").unwrap(), 1);
-        assert_eq!(store.bump_mismatch(1, "pid").unwrap(), 2);
-        assert_eq!(store.bump_mismatch(1, "pid").unwrap(), 3);
-        assert_eq!(store.bump_mismatch(1, "pid").unwrap(), 3);
+        assert_eq!(store.progress(1, "pid").unwrap(), RoomProgress::default());
+        let streaks: Vec<u8> = (0..4)
+            .map(|i| {
+                store
+                    .record_miss(1, "pid", true, 0b01, 1_000 + i)
+                    .unwrap()
+                    .mismatch_streak
+            })
+            .collect();
+        assert_eq!(
+            streaks,
+            vec![1, 2, MISMATCH_STREAK_LIMIT, MISMATCH_STREAK_LIMIT]
+        );
+        let after = store.record_miss(1, "pid", false, 0b10, 9_000).unwrap();
+        assert!(after.text_sent, "delivered text is never forgotten");
+        assert_eq!(after.images_sent, 0b11, "delivered images accumulate");
+        assert_eq!(
+            after.first_miss_at,
+            Some(1_000),
+            "the window starts at the first miss"
+        );
     }
 
     #[test]
@@ -1145,7 +1286,7 @@ mod tests {
     fn build<'a>(
         ax: &'a FakeAxReadPort,
         ladder: &'a ImageLadder<'a>,
-        sender: &'a ScriptedSender,
+        sender: &'a dyn RelaySender,
         store: &'a SqliteRelayStore,
         journal: &'a SqliteHistoryStore,
         clock: &'a VirtualClock,
@@ -1235,15 +1376,13 @@ mod tests {
     #[test]
     fn image_mismatch_retries_then_settles_final_after_three() {
         let clock = VirtualClock::new(0);
-        // Two source images, but the sender only ever delivers one.
+        // Two source images, but the sender never delivers one.
         let mut m = msg("m1", 1, 0, "with images");
         m.images = vec![img_ref(0), img_ref(1)];
         let ax = FakeAxReadPort::new(vec![m]);
         let rig = LadderRig::acquiring(clock.clone());
         let ladder = rig.ladder_acquiring();
-        let sender = ScriptedSender::new(RelaySendOutcome::Sent {
-            images_delivered: 1,
-        });
+        let sender = SequenceSender::new(vec![sent(0)]);
         let store = SqliteRelayStore::open_in_memory().unwrap();
         let journal = SqliteHistoryStore::open_in_memory().unwrap();
         let mut relay = build(&ax, &ladder, &sender, &store, &journal, &clock, pair(&[10]));
@@ -1265,6 +1404,104 @@ mod tests {
         assert!(!store
             .is_delivered(10, &crate::context::provenance_id("m1"))
             .unwrap());
+        assert_eq!(
+            sender.calls(),
+            vec![
+                ("with images".to_string(), 2),
+                (String::new(), 2),
+                (String::new(), 2)
+            ],
+            "the text goes once; retries carry only the missing images"
+        );
+    }
+
+    #[test]
+    fn image_retry_sends_only_the_missing_images() {
+        let clock = VirtualClock::new(0);
+        let mut m = msg("m1", 1, 0, "hello");
+        m.images = vec![img_ref(0), img_ref(1)];
+        let ax = FakeAxReadPort::new(vec![m]);
+        let rig = LadderRig::acquiring(clock.clone());
+        let ladder = rig.ladder_acquiring();
+        let sender = SequenceSender::new(vec![sent(1), sent(1)]);
+        let store = SqliteRelayStore::open_in_memory().unwrap();
+        let journal = SqliteHistoryStore::open_in_memory().unwrap();
+        let mut relay = build(&ax, &ladder, &sender, &store, &journal, &clock, pair(&[10]));
+
+        let first = relay.tick();
+        assert!(matches!(
+            first.processed[0].settlement,
+            Settlement::MissRetrying(_)
+        ));
+        let second = relay.tick();
+        assert!(matches!(
+            second.processed[0].settlement,
+            Settlement::Committed(ImageTally {
+                source: 2,
+                delivered: 2
+            })
+        ));
+        assert_eq!(
+            sender.calls(),
+            vec![("hello".to_string(), 2), (String::new(), 1)]
+        );
+        assert!(store
+            .is_delivered(10, &crate::context::provenance_id("m1"))
+            .unwrap());
+    }
+
+    #[test]
+    fn more_than_max_images_commits_once_the_capped_images_arrive() {
+        let clock = VirtualClock::new(0);
+        let mut m = msg("m1", 1, 0, "many images");
+        m.images = (0..(MAX_IMAGES + 2)).map(img_ref).collect();
+        let ax = FakeAxReadPort::new(vec![m]);
+        let rig = LadderRig::acquiring(clock.clone());
+        let ladder = rig.ladder_acquiring();
+        let sender = SequenceSender::new(vec![sent(MAX_IMAGES)]);
+        let store = SqliteRelayStore::open_in_memory().unwrap();
+        let journal = SqliteHistoryStore::open_in_memory().unwrap();
+        let mut relay = build(&ax, &ladder, &sender, &store, &journal, &clock, pair(&[10]));
+
+        let tick = relay.tick();
+        relay.tick();
+        assert_eq!(tick.processed[0].dropped_images, 2);
+        assert!(matches!(
+            tick.processed[0].settlement,
+            Settlement::Committed(_)
+        ));
+        assert_eq!(
+            sender.calls(),
+            vec![("many images".to_string(), MAX_IMAGES)],
+            "the text must be sent exactly once"
+        );
+    }
+
+    #[test]
+    fn missing_images_are_retried_only_within_the_window() {
+        let clock = VirtualClock::new(0);
+        let mut m = msg("m1", 1, 0, "with images");
+        m.images = vec![img_ref(0), img_ref(1)];
+        let ax = FakeAxReadPort::new(vec![m]);
+        let rig = LadderRig::acquiring(clock.clone());
+        let ladder = rig.ladder_acquiring();
+        let sender = SequenceSender::new(vec![sent(0)]);
+        let store = SqliteRelayStore::open_in_memory().unwrap();
+        let journal = SqliteHistoryStore::open_in_memory().unwrap();
+        let mut relay = build(&ax, &ladder, &sender, &store, &journal, &clock, pair(&[10]));
+
+        assert!(matches!(
+            relay.tick().processed[0].settlement,
+            Settlement::MissRetrying(_)
+        ));
+        clock.advance_ms(MISS_RETRY_WINDOW_MS);
+        let late = relay.tick();
+        assert!(
+            matches!(late.processed[0].settlement, Settlement::MissFinal(_)),
+            "a retry after the 30 s window must settle final, got {:?}",
+            late.processed[0].settlement
+        );
+        assert_eq!(relay.cursor().last_at, 1);
     }
 
     #[test]
@@ -1286,6 +1523,33 @@ mod tests {
 
         let tick = relay.tick();
         assert_eq!(sender.send_count(), 1);
+        assert!(matches!(
+            tick.processed[0].settlement,
+            Settlement::MissRetrying(_)
+        ));
+    }
+
+    #[test]
+    fn image_only_message_with_no_acquired_image_sends_nothing() {
+        let clock = VirtualClock::new(0);
+        let mut m = msg("m1", 1, 0, "");
+        m.images = vec![img_ref(0)];
+        let ax = FakeAxReadPort::new(vec![m]);
+        let rig = FailLadderRig::new(clock.clone());
+        let ladder = rig.ladder();
+        let sender = ScriptedSender::new(RelaySendOutcome::Sent {
+            images_delivered: 0,
+        });
+        let store = SqliteRelayStore::open_in_memory().unwrap();
+        let journal = SqliteHistoryStore::open_in_memory().unwrap();
+        let mut relay = build(&ax, &ladder, &sender, &store, &journal, &clock, pair(&[10]));
+
+        let tick = relay.tick();
+        assert_eq!(
+            sender.send_count(),
+            0,
+            "an empty message must never be sent"
+        );
         assert!(matches!(
             tick.processed[0].settlement,
             Settlement::MissRetrying(_)
@@ -1316,30 +1580,6 @@ mod tests {
             .is_delivered(10, &crate::context::provenance_id("m1"))
             .unwrap());
         assert_eq!(relay.cursor().last_at, 1);
-    }
-
-    #[test]
-    fn dropped_images_over_cap_report_and_never_commit() {
-        let clock = VirtualClock::new(0);
-        let mut m = msg("m1", 1, 0, "many images");
-        m.images = (0..(MAX_IMAGES + 2)).map(img_ref).collect();
-        let ax = FakeAxReadPort::new(vec![m]);
-        let rig = LadderRig::acquiring(clock.clone());
-        let ladder = rig.ladder_acquiring();
-        // Even delivering the capped 10 leaves the two overflow images missing.
-        let sender = ScriptedSender::new(RelaySendOutcome::Sent {
-            images_delivered: MAX_IMAGES,
-        });
-        let store = SqliteRelayStore::open_in_memory().unwrap();
-        let journal = SqliteHistoryStore::open_in_memory().unwrap();
-        let mut relay = build(&ax, &ladder, &sender, &store, &journal, &clock, pair(&[10]));
-
-        let tick = relay.tick();
-        assert_eq!(tick.processed[0].dropped_images, 2);
-        assert!(matches!(
-            tick.processed[0].settlement,
-            Settlement::MissRetrying(_)
-        ));
     }
 
     #[test]
