@@ -311,8 +311,7 @@ const ALLOWED_KEYS: [&str; 4] = [
 impl Knobs {
     /// 구성의 안정 다이제스트. 필드 순서가 고정된 JSON을 provenance 해시한다.
     pub fn digest(&self) -> KnobsDigest {
-        let json = serde_json::to_string(self).unwrap_or_default();
-        KnobsDigest(provenance_id(&json))
+        KnobsDigest(provenance_id(&self.to_json()))
     }
 
     /// 원문·경로·URL을 담지 않는 직렬화 문자열. `knob_generation.knobs_json`에
@@ -1168,13 +1167,9 @@ impl ImproveStore for SqliteImproveStore {
             .prepare("SELECT knobs_digest FROM rolled_back_knobs")
             .map_err(db_err)?;
         let rows = stmt
-            .query_map([], |row| row.get::<_, String>(0))
+            .query_map([], |row| row.get::<_, String>(0).map(KnobsDigest))
             .map_err(db_err)?;
-        let mut out = BTreeSet::new();
-        for row in rows {
-            out.insert(KnobsDigest(row.map_err(db_err)?));
-        }
-        Ok(out)
+        rows.collect::<Result<BTreeSet<_>, _>>().map_err(db_err)
     }
 
     fn record_rolled_back(&self, digest: &KnobsDigest, at: i64) -> Result<(), ImproveError> {
@@ -1223,11 +1218,7 @@ impl ImproveStore for SqliteImproveStore {
                 })
             })
             .map_err(db_err)?;
-        let mut out = Vec::new();
-        for row in rows {
-            out.push(row.map_err(db_err)?);
-        }
-        Ok(out)
+        rows.collect::<Result<Vec<_>, _>>().map_err(db_err)
     }
 
     fn set_holdout(&self, qa_pair_ids: &[i64]) -> Result<(), ImproveError> {
@@ -1254,11 +1245,7 @@ impl ImproveStore for SqliteImproveStore {
         let rows = stmt
             .query_map([], |row| row.get::<_, i64>(0))
             .map_err(db_err)?;
-        let mut out = Vec::new();
-        for row in rows {
-            out.push(row.map_err(db_err)?);
-        }
-        Ok(out)
+        rows.collect::<Result<Vec<_>, _>>().map_err(db_err)
     }
 }
 

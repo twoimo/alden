@@ -200,7 +200,7 @@ impl TempScope {
     /// The working directory raw data must be written under, or `None` once the
     /// scope has been deleted.
     pub fn path(&self) -> Option<&std::path::Path> {
-        self.dir.as_ref().map(|d| d.path())
+        self.dir.as_ref().map(tempfile::TempDir::path)
     }
 
     /// Delete the working data and report whether it finished within five
@@ -349,20 +349,17 @@ impl PageCollector for AsideCollector<'_> {
     fn collect(&self, url: &str, scope: &mut TempScope) -> Result<Collected, CollectError> {
         // Read the session secret; a missing/denied secret surfaces by *name*
         // only, never by value (R11.6, R11.7).
-        let session = match self.secrets.get(SecretKey::CollectorSession) {
-            Ok(secret) => Some(secret),
-            Err(_) => {
-                return Err(CollectError::Unauthorized {
-                    item: "브라우저 연결 정보",
-                })
+        let session = self.secrets.get(SecretKey::CollectorSession).map_err(|_| {
+            CollectError::Unauthorized {
+                item: "브라우저 연결 정보",
             }
-        };
+        })?;
 
         // Bound the collection to ten seconds on the injected clock (R11.11).
         let start = self.clock.now_ms();
         let mut result = self
             .transport
-            .fetch(&self.endpoint, url, session.as_ref(), scope);
+            .fetch(&self.endpoint, url, Some(&session), scope);
         let elapsed = self.clock.now_ms().saturating_sub(start);
         if elapsed > (ASIDE_COLLECT_TIMEOUT_SECS * 1000) as i64 {
             return Err(CollectError::Timeout);
