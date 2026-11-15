@@ -10,6 +10,7 @@ use crate::auto_reply_runtime::validate_private_regular_file;
 
 pub(super) const AUTO_REPLY_QUEUE_LEGACY_USER_VERSION: i64 = 0;
 pub(super) const AUTO_REPLY_QUEUE_JOURNAL_USER_VERSION: i64 = 2;
+pub(super) const AUTO_REPLY_QUEUE_SEND_AUTHORITY_USER_VERSION: i64 = 3;
 pub(super) const AUTO_REPLY_QUEUE_JOURNAL_MAX_ROWS: i64 = 4096;
 
 const AUTO_REPLY_REPLY_JOBS_TABLE_SQL: &str = r#"
@@ -43,6 +44,26 @@ CREATE TABLE reply_jobs(
     created_at REAL NOT NULL,
     updated_at REAL NOT NULL,
     attempt_no INTEGER NOT NULL DEFAULT 0 CHECK(attempt_no BETWEEN 0 AND 1000000)
+);
+"#;
+/// `ax_mutation_authorized` is 1 once the job was committed to `sending`, so
+/// Return may have been pressed. It outlives the capped transition journal.
+pub(super) const AUTO_REPLY_REPLY_JOBS_V3_TABLE_SQL: &str = r#"
+CREATE TABLE reply_jobs(
+    event_id TEXT PRIMARY KEY,
+    event_json TEXT NOT NULL,
+    status TEXT NOT NULL,
+    due_at REAL,
+    decision TEXT,
+    reason TEXT,
+    category TEXT,
+    reply TEXT,
+    scheduled_delay_seconds REAL,
+    error_class TEXT,
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL,
+    attempt_no INTEGER NOT NULL DEFAULT 0 CHECK(attempt_no BETWEEN 0 AND 1000000),
+    ax_mutation_authorized INTEGER NOT NULL DEFAULT 0 CHECK(ax_mutation_authorized IN (0, 1))
 );
 "#;
 pub(super) const AUTO_REPLY_REPLY_JOBS_STATUS_INDEX_SQL: &str =
@@ -123,7 +144,7 @@ CREATE TABLE pipeline_transitions(
 pub(super) const AUTO_REPLY_PIPELINE_TRANSITIONS_INDEX_SQL: &str =
     "CREATE INDEX idx_pipeline_transitions_event_seq ON pipeline_transitions(event_id, seq);";
 
-pub(super) const AUTO_REPLY_PIPELINE_TRANSITIONS_INSERT_TRIGGER_SQL: &str = r#"
+pub(super) const AUTO_REPLY_PIPELINE_TRANSITIONS_INSERT_TRIGGER_V2_SQL: &str = r#"
 CREATE TRIGGER trg_reply_jobs_transition_insert
 AFTER INSERT ON reply_jobs
 BEGIN
@@ -137,7 +158,24 @@ BEGIN
 END;
 "#;
 
-pub(super) const AUTO_REPLY_PIPELINE_TRANSITIONS_UPDATE_TRIGGER_SQL: &str = r#"
+pub(super) const AUTO_REPLY_PIPELINE_TRANSITIONS_INSERT_TRIGGER_V3_SQL: &str = r#"
+CREATE TRIGGER trg_reply_jobs_transition_insert
+AFTER INSERT ON reply_jobs
+BEGIN
+  UPDATE reply_jobs
+  SET ax_mutation_authorized = 1
+  WHERE event_id = NEW.event_id AND NEW.status = 'sending';
+  INSERT INTO pipeline_transitions(
+    schema_version,event_id,attempt_no,component,from_state,to_state,
+    code,source_epoch,occurred_at_ns
+  ) VALUES(
+    1,NEW.event_id,NEW.attempt_no,'queue','none',NEW.status,
+    'enqueued',CASE WHEN json_valid(NEW.event_json) AND json_type(NEW.event_json, '$.source_epoch') = 'integer' AND json_extract(NEW.event_json, '$.source_epoch') BETWEEN 1 AND 9223372036854775806 THEN json_extract(NEW.event_json, '$.source_epoch') ELSE NULL END,CAST((julianday('now') - 2440587.5) * 86400000000000 AS INTEGER)
+  );
+END;
+"#;
+
+pub(super) const AUTO_REPLY_PIPELINE_TRANSITIONS_UPDATE_TRIGGER_V2_SQL: &str = r#"
 CREATE TRIGGER trg_reply_jobs_transition_update
 AFTER UPDATE OF status ON reply_jobs
 WHEN OLD.status IS NOT NEW.status
@@ -145,6 +183,30 @@ BEGIN
   UPDATE reply_jobs
   SET attempt_no = OLD.attempt_no + 1
   WHERE event_id = NEW.event_id AND NEW.status = 'processing';
+  INSERT INTO pipeline_transitions(
+    schema_version,event_id,attempt_no,component,from_state,to_state,
+    code,source_epoch,occurred_at_ns
+  ) VALUES(
+    1,NEW.event_id,
+    CASE WHEN NEW.status = 'processing' THEN OLD.attempt_no + 1
+      ELSE NEW.attempt_no END,
+    'queue',OLD.status,NEW.status,'status_changed',
+    CASE WHEN json_valid(NEW.event_json) AND json_type(NEW.event_json, '$.source_epoch') = 'integer' AND json_extract(NEW.event_json, '$.source_epoch') BETWEEN 1 AND 9223372036854775806 THEN json_extract(NEW.event_json, '$.source_epoch') ELSE NULL END,CAST((julianday('now') - 2440587.5) * 86400000000000 AS INTEGER)
+  );
+END;
+"#;
+
+pub(super) const AUTO_REPLY_PIPELINE_TRANSITIONS_UPDATE_TRIGGER_V3_SQL: &str = r#"
+CREATE TRIGGER trg_reply_jobs_transition_update
+AFTER UPDATE OF status ON reply_jobs
+WHEN OLD.status IS NOT NEW.status
+BEGIN
+  UPDATE reply_jobs
+  SET attempt_no = OLD.attempt_no + 1
+  WHERE event_id = NEW.event_id AND NEW.status = 'processing';
+  UPDATE reply_jobs
+  SET ax_mutation_authorized = 1
+  WHERE event_id = NEW.event_id AND NEW.status = 'sending';
   INSERT INTO pipeline_transitions(
     schema_version,event_id,attempt_no,component,from_state,to_state,
     code,source_epoch,occurred_at_ns
@@ -270,6 +332,18 @@ pub(super) fn parse_auto_reply_transition_event_id(value: &str) -> Option<(i64, 
     Some((parse_field(chat_id)?, parse_field(log_id)?))
 }
 
+/// The queue layouts a stopped room can still hold on disk. The supervisor
+/// upgrades a queue to the newest one before any worker opens it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum QueueLayout {
+    /// v0: the work table, without the transition journal.
+    Legacy,
+    /// v2: the transition journal and the per-job attempt authority.
+    Journal,
+    /// v3: v2 plus the per-job send authority.
+    SendAuthority,
+}
+
 pub(super) fn validate_stopped_clean_queue(queue_path: &Path, expected_chat_id: i64) -> Result<()> {
     const MAX_QUEUE_BYTES: u64 = 64 * 1024 * 1024;
     let expected_room_name = expected_chat_id.to_string();
@@ -294,10 +368,23 @@ pub(super) fn validate_stopped_clean_queue(queue_path: &Path, expected_chat_id: 
         anyhow::bail!("AutoReply stopped-clean queue quick_check failed");
     }
     let user_version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-    let has_transition_journal = match user_version {
-        AUTO_REPLY_QUEUE_LEGACY_USER_VERSION => false,
-        AUTO_REPLY_QUEUE_JOURNAL_USER_VERSION => true,
+    let layout = match user_version {
+        AUTO_REPLY_QUEUE_LEGACY_USER_VERSION => QueueLayout::Legacy,
+        AUTO_REPLY_QUEUE_JOURNAL_USER_VERSION => QueueLayout::Journal,
+        AUTO_REPLY_QUEUE_SEND_AUTHORITY_USER_VERSION => QueueLayout::SendAuthority,
         _ => anyhow::bail!("AutoReply stopped-clean queue version is unsupported"),
+    };
+    let has_transition_journal = layout != QueueLayout::Legacy;
+    let (insert_trigger_sql, update_trigger_sql) = if layout == QueueLayout::SendAuthority {
+        (
+            AUTO_REPLY_PIPELINE_TRANSITIONS_INSERT_TRIGGER_V3_SQL,
+            AUTO_REPLY_PIPELINE_TRANSITIONS_UPDATE_TRIGGER_V3_SQL,
+        )
+    } else {
+        (
+            AUTO_REPLY_PIPELINE_TRANSITIONS_INSERT_TRIGGER_V2_SQL,
+            AUTO_REPLY_PIPELINE_TRANSITIONS_UPDATE_TRIGGER_V2_SQL,
+        )
     };
     let tables = connection
         .prepare(
@@ -371,12 +458,14 @@ pub(super) fn validate_stopped_clean_queue(queue_path: &Path, expected_chat_id: 
     ];
     let mut v2_reply_job_columns = legacy_reply_job_columns.to_vec();
     v2_reply_job_columns.push(("attempt_no", "INTEGER", 1, 0));
+    let mut v3_reply_job_columns = v2_reply_job_columns.clone();
+    v3_reply_job_columns.push(("ax_mutation_authorized", "INTEGER", 1, 0));
     validate_columns(
         "reply_jobs",
-        if has_transition_journal {
-            &v2_reply_job_columns
-        } else {
-            &legacy_reply_job_columns
+        match layout {
+            QueueLayout::Legacy => &legacy_reply_job_columns,
+            QueueLayout::Journal => &v2_reply_job_columns,
+            QueueLayout::SendAuthority => &v3_reply_job_columns,
         },
     )?;
     validate_columns(
@@ -471,10 +560,10 @@ pub(super) fn validate_stopped_clean_queue(queue_path: &Path, expected_chat_id: 
         (
             "table",
             "reply_jobs",
-            if has_transition_journal {
-                AUTO_REPLY_REPLY_JOBS_V2_TABLE_SQL
-            } else {
-                AUTO_REPLY_REPLY_JOBS_TABLE_SQL
+            match layout {
+                QueueLayout::Legacy => AUTO_REPLY_REPLY_JOBS_TABLE_SQL,
+                QueueLayout::Journal => AUTO_REPLY_REPLY_JOBS_V2_TABLE_SQL,
+                QueueLayout::SendAuthority => AUTO_REPLY_REPLY_JOBS_V3_TABLE_SQL,
             },
         ),
     ];
@@ -508,12 +597,12 @@ pub(super) fn validate_stopped_clean_queue(queue_path: &Path, expected_chat_id: 
             (
                 "trigger",
                 "trg_reply_jobs_transition_insert",
-                AUTO_REPLY_PIPELINE_TRANSITIONS_INSERT_TRIGGER_SQL,
+                insert_trigger_sql,
             ),
             (
                 "trigger",
                 "trg_reply_jobs_transition_update",
-                AUTO_REPLY_PIPELINE_TRANSITIONS_UPDATE_TRIGGER_SQL,
+                update_trigger_sql,
             ),
         ]);
     }
@@ -586,12 +675,12 @@ pub(super) fn validate_stopped_clean_queue(queue_path: &Path, expected_chat_id: 
             (
                 "trg_reply_jobs_transition_insert",
                 "reply_jobs",
-                AUTO_REPLY_PIPELINE_TRANSITIONS_INSERT_TRIGGER_SQL,
+                insert_trigger_sql,
             ),
             (
                 "trg_reply_jobs_transition_update",
                 "reply_jobs",
-                AUTO_REPLY_PIPELINE_TRANSITIONS_UPDATE_TRIGGER_SQL,
+                update_trigger_sql,
             ),
         ];
         if triggers.len() != expected_triggers.len()
@@ -722,6 +811,17 @@ pub(super) fn validate_stopped_clean_queue(queue_path: &Path, expected_chat_id: 
         )?;
         if invalid_attempts != 0 {
             anyhow::bail!("AutoReply stopped-clean queue attempt authority is invalid");
+        }
+    }
+    if layout == QueueLayout::SendAuthority {
+        let invalid_authority: i64 = connection.query_row(
+            "SELECT COUNT(*) FROM reply_jobs WHERE \
+             typeof(ax_mutation_authorized) != 'integer' OR ax_mutation_authorized NOT IN (0, 1)",
+            [],
+            |row| row.get(0),
+        )?;
+        if invalid_authority != 0 {
+            anyhow::bail!("AutoReply stopped-clean queue send authority is invalid");
         }
     }
 

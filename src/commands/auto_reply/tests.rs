@@ -38,10 +38,13 @@ use super::process::{
 use super::queue::{
     parse_auto_reply_transition_event_id, validate_stopped_clean_queue,
     AUTO_REPLY_PIPELINE_TRANSITIONS_CAP_TRIGGER_SQL, AUTO_REPLY_PIPELINE_TRANSITIONS_INDEX_SQL,
-    AUTO_REPLY_PIPELINE_TRANSITIONS_INSERT_TRIGGER_SQL, AUTO_REPLY_PIPELINE_TRANSITIONS_TABLE_SQL,
-    AUTO_REPLY_PIPELINE_TRANSITIONS_UPDATE_TRIGGER_SQL, AUTO_REPLY_QUEUE_JOURNAL_MAX_ROWS,
+    AUTO_REPLY_PIPELINE_TRANSITIONS_INSERT_TRIGGER_V2_SQL,
+    AUTO_REPLY_PIPELINE_TRANSITIONS_INSERT_TRIGGER_V3_SQL, AUTO_REPLY_PIPELINE_TRANSITIONS_TABLE_SQL,
+    AUTO_REPLY_PIPELINE_TRANSITIONS_UPDATE_TRIGGER_V2_SQL,
+    AUTO_REPLY_PIPELINE_TRANSITIONS_UPDATE_TRIGGER_V3_SQL, AUTO_REPLY_QUEUE_JOURNAL_MAX_ROWS,
     AUTO_REPLY_QUEUE_JOURNAL_USER_VERSION, AUTO_REPLY_QUEUE_LEGACY_USER_VERSION,
-    AUTO_REPLY_REPLY_JOBS_STATUS_INDEX_SQL, AUTO_REPLY_REPLY_JOBS_V2_TABLE_SQL,
+    AUTO_REPLY_QUEUE_SEND_AUTHORITY_USER_VERSION, AUTO_REPLY_REPLY_JOBS_STATUS_INDEX_SQL,
+    AUTO_REPLY_REPLY_JOBS_V2_TABLE_SQL,
 };
 use super::runner::{
     is_homebrew_cellar_version_path, is_homebrew_opt_python_keg_path,
@@ -1144,10 +1147,10 @@ fn stopped_clean_queue_v2_fixture_with_table(
         .execute_batch(AUTO_REPLY_PIPELINE_TRANSITIONS_INDEX_SQL)
         .expect("create transition journal index");
     connection
-        .execute_batch(AUTO_REPLY_PIPELINE_TRANSITIONS_INSERT_TRIGGER_SQL)
+        .execute_batch(AUTO_REPLY_PIPELINE_TRANSITIONS_INSERT_TRIGGER_V2_SQL)
         .expect("create transition insert trigger");
     connection
-        .execute_batch(AUTO_REPLY_PIPELINE_TRANSITIONS_UPDATE_TRIGGER_SQL)
+        .execute_batch(AUTO_REPLY_PIPELINE_TRANSITIONS_UPDATE_TRIGGER_V2_SQL)
         .expect("create transition update trigger");
     connection
         .execute_batch(AUTO_REPLY_PIPELINE_TRANSITIONS_CAP_TRIGGER_SQL)
@@ -1163,6 +1166,122 @@ fn stopped_clean_queue_v2_fixture(path: &Path, include_breaker: bool) {
         include_breaker,
         AUTO_REPLY_PIPELINE_TRANSITIONS_TABLE_SQL,
     );
+}
+
+/// The v3 queue exactly as the Python migration leaves a v2 one.
+fn stopped_clean_queue_v3_fixture_with_triggers(
+    path: &Path,
+    include_breaker: bool,
+    insert_trigger_sql: &str,
+    update_trigger_sql: &str,
+) {
+    stopped_clean_queue_v2_fixture(path, include_breaker);
+    let connection = rusqlite::Connection::open(path).expect("open v3 queue fixture");
+    connection
+        .execute_batch(&format!(
+            "ALTER TABLE reply_jobs ADD COLUMN ax_mutation_authorized INTEGER NOT NULL \
+             DEFAULT 0 CHECK(ax_mutation_authorized IN (0, 1));
+             DROP TRIGGER trg_reply_jobs_transition_insert;
+             DROP TRIGGER trg_reply_jobs_transition_update;
+             {insert_trigger_sql}
+             {update_trigger_sql}"
+        ))
+        .expect("add the reply job send authority");
+    connection
+        .pragma_update(
+            None,
+            "user_version",
+            AUTO_REPLY_QUEUE_SEND_AUTHORITY_USER_VERSION,
+        )
+        .expect("set v3 queue user_version");
+}
+
+fn stopped_clean_queue_v3_fixture(path: &Path, include_breaker: bool) {
+    stopped_clean_queue_v3_fixture_with_triggers(
+        path,
+        include_breaker,
+        AUTO_REPLY_PIPELINE_TRANSITIONS_INSERT_TRIGGER_V3_SQL,
+        AUTO_REPLY_PIPELINE_TRANSITIONS_UPDATE_TRIGGER_V3_SQL,
+    );
+}
+
+#[test]
+fn stopped_clean_queue_accepts_exact_send_authority_v3_read_only() {
+    let root = tempfile::tempdir().unwrap();
+    let room = stopped_clean_queue_test_room(root.path());
+    for include_breaker in [false, true] {
+        let queue = room.join(format!("v3-{include_breaker}.sqlite3"));
+        stopped_clean_queue_v3_fixture(&queue, include_breaker);
+        validate_stopped_clean_queue(&queue, 42).expect("exact v3 queue must be accepted");
+        let connection = rusqlite::Connection::open_with_flags(
+            &queue,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .unwrap();
+        assert_eq!(
+            connection
+                .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+                .unwrap(),
+            AUTO_REPLY_QUEUE_SEND_AUTHORITY_USER_VERSION
+        );
+    }
+}
+
+#[test]
+fn stopped_clean_queue_rejects_a_v3_queue_that_does_not_keep_its_send_authority() {
+    let root = tempfile::tempdir().unwrap();
+    let room = stopped_clean_queue_test_room(root.path());
+
+    for (name, insert_trigger_sql, update_trigger_sql) in [
+        (
+            "v3-with-v2-insert-trigger",
+            AUTO_REPLY_PIPELINE_TRANSITIONS_INSERT_TRIGGER_V2_SQL,
+            AUTO_REPLY_PIPELINE_TRANSITIONS_UPDATE_TRIGGER_V3_SQL,
+        ),
+        (
+            "v3-with-v2-update-trigger",
+            AUTO_REPLY_PIPELINE_TRANSITIONS_INSERT_TRIGGER_V3_SQL,
+            AUTO_REPLY_PIPELINE_TRANSITIONS_UPDATE_TRIGGER_V2_SQL,
+        ),
+    ] {
+        let stale_trigger = room.join(format!("{name}.sqlite3"));
+        stopped_clean_queue_v3_fixture_with_triggers(
+            &stale_trigger,
+            false,
+            insert_trigger_sql,
+            update_trigger_sql,
+        );
+        assert!(validate_stopped_clean_queue(&stale_trigger, 42).is_err());
+    }
+
+    let invalid_value = room.join("v3-invalid-authority.sqlite3");
+    stopped_clean_queue_v3_fixture(&invalid_value, false);
+    let connection = rusqlite::Connection::open(&invalid_value).unwrap();
+    connection
+        .execute_batch(
+            "PRAGMA ignore_check_constraints = ON;
+                 UPDATE reply_jobs SET ax_mutation_authorized = 2
+                 WHERE event_id = 'db:42:1';",
+        )
+        .unwrap();
+    drop(connection);
+    assert!(validate_stopped_clean_queue(&invalid_value, 42).is_err());
+
+    for version in [
+        AUTO_REPLY_QUEUE_LEGACY_USER_VERSION,
+        1,
+        AUTO_REPLY_QUEUE_JOURNAL_USER_VERSION,
+        4,
+    ] {
+        let queue = room.join(format!("v3-version-{version}.sqlite3"));
+        stopped_clean_queue_v3_fixture(&queue, false);
+        let connection = rusqlite::Connection::open(&queue).unwrap();
+        connection
+            .pragma_update(None, "user_version", version)
+            .unwrap();
+        drop(connection);
+        assert!(validate_stopped_clean_queue(&queue, 42).is_err());
+    }
 }
 
 #[test]
@@ -1261,7 +1380,7 @@ fn stopped_clean_queue_accepts_exact_legacy_v0_and_journal_v2_read_only() {
 }
 
 #[test]
-fn stopped_clean_queue_exactly_matches_python_helper_v2_schema() {
+fn stopped_clean_queue_exactly_matches_python_helper_schema() {
     let root = tempfile::tempdir().unwrap();
     let room = stopped_clean_queue_test_room(root.path());
     let queue = room.join("reply-queue.sqlite3");
@@ -1302,7 +1421,16 @@ connection.close()
         String::from_utf8_lossy(&output.stderr)
     );
     validate_stopped_clean_queue(&queue, 42)
-        .expect("Rust must accept the exact Python helper v2 schema");
+        .expect("Rust must accept the exact Python helper schema");
+    let connection =
+        rusqlite::Connection::open_with_flags(&queue, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .unwrap();
+    assert_eq!(
+        connection
+            .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        AUTO_REPLY_QUEUE_SEND_AUTHORITY_USER_VERSION
+    );
 }
 
 #[test]
