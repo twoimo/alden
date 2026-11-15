@@ -560,7 +560,6 @@ RESPONSE_TIME_CAPTION_REASONS = frozenset(
         "image_caption",
     }
 )
-REPLY_MEMORY_LIMIT = 6
 NON_HUMAN_AUTHORS = {
     "드리고",
     "드리고봇",
@@ -779,20 +778,6 @@ def reply_authors() -> set[str]:
 
 def is_context_only_author(value: object) -> bool:
     return str(value or "").strip() in CONTEXT_ONLY_AUTHORS
-
-
-def is_reply_author(value: object) -> bool:
-    author = str(value or "").strip()
-    allowed = reply_authors()
-    return (
-        bool(author)
-        and bool(allowed)
-        and author.lower() != "missing value"
-        and author not in NON_HUMAN_AUTHORS
-        and not author.endswith("봇")
-        and not is_context_only_author(author)
-        and author in allowed
-    )
 
 
 def load_state() -> dict:
@@ -4174,41 +4159,6 @@ def _singleton_burst_event(event: dict) -> dict:
     prepared["burst_message_count"] = 1 if log_id is not None else 0
     prepared["burst_policy_version"] = BURST_POLICY_VERSION
     return prepared
-
-
-def _immediate_burst_predecessor(event: dict) -> str | None:
-    rows = _verified_burst_rows(event)
-    if len(rows) < 2:
-        return None
-    predecessor = rows[-2]
-    current = rows[-1]
-    # Media cannot be safely transferred from one canonical queue job to
-    # another, so it is an explicit burst boundary.
-    if predecessor["attachment"]:
-        return None
-    chat_id = _fence_int(event.get("chat_id"))
-    if chat_id is None:
-        return None
-    return f"db:{chat_id}:{predecessor['log_id']}"
-
-
-def _predecessor_event_matches(predecessor: object, successor: dict) -> bool:
-    if not isinstance(predecessor, dict):
-        return False
-    successor_rows = _verified_burst_rows(successor)
-    if len(successor_rows) < 2:
-        return False
-    expected = successor_rows[-2]
-    actual = _burst_row(predecessor, current_event=True)
-    expected_event_id = f"db:{expected['chat_id']}:{expected['log_id']}"
-    return bool(
-        actual == expected
-        and predecessor.get("event_id") == expected_event_id
-        and predecessor.get("canonical_event_id") == expected_event_id
-        and predecessor.get("chat_id") == successor.get("chat_id")
-        and predecessor.get("owner_id") == successor.get("owner_id")
-        and predecessor.get("source_epoch") == successor.get("source_epoch")
-    )
 
 
 def _verified_burst_rows(event: dict) -> list[dict]:
@@ -13294,10 +13244,6 @@ def model_capacity_probe_cli(arguments: list[str]) -> int:
     return 0 if outcome.get("capacity_available") is True else 2
 
 
-MEDIA_DIR_PREFIX = "auto-reply-db-media-"
-MEDIA_ACTIVE_MARKER = ".auto-reply-inflight"
-
-
 def cleanup_media_path(path: Path | None, marker: Path | None = None) -> None:
     """Remove only a producer-owned temporary media file after terminal processing."""
     if path is None:
@@ -15097,14 +15043,6 @@ def defer_processing_for_context_refresh(
     )
 
 
-def processing_job_has_no_send_attempt(
-    connection: sqlite3.Connection | None,
-    event_id: str,
-) -> bool:
-    """Return true only before send_reply durable sending transition."""
-    return reply_job_delivery_phase(connection, event_id) == "processing"
-
-
 def reply_job_delivery_phase(
     connection: sqlite3.Connection | None,
     event_id: str,
@@ -15983,18 +15921,6 @@ def _worker_sleep_seconds(now: float, next_recovery_at: float) -> float:
     return min(WORKER_POLL_SECONDS, until_recovery or WORKER_POLL_SECONDS)
 
 
-PROACTIVE_EVENT_PREFIX = "proactive"
-PROACTIVE_TOKEN_DENYLIST = {
-    "ㅋㅋ",
-    "ㅋㅋㅋ",
-    "ㅎㅎ",
-    "ㅇㅇ",
-    "ㄷㄷ",
-    "ㅁㅊ",
-    "zz",
-    "ㅠㅠ",
-    "ㅜㅜ",
-}
 GEEKNEWS_FEED_URL = "https://news.hada.io/rss/news"
 GEEKNEWS_TOPIC_RE = re.compile(r"^https://news\.hada\.io/topic\?id=([1-9][0-9]{0,9})\Z")
 GEEKNEWS_CURSOR_NAME = "geeknews-rss-cursor.json"
@@ -16012,32 +15938,6 @@ GEEKNEWS_DAILY_SLOTS = (
 )
 GEEKNEWS_ROOM_QUIET_SECONDS = 10 * 60
 
-
-def _style_topic_candidates(common_tokens_json: str) -> list[str]:
-    try:
-        tokens = json.loads(common_tokens_json)
-    except (TypeError, ValueError, json.JSONDecodeError):
-        return []
-    if not isinstance(tokens, dict):
-        return []
-    ranked: list[tuple[int, str]] = []
-    for token, count in tokens.items():
-        if not isinstance(token, str):
-            continue
-        cleaned = token.strip()
-        if (
-            not cleaned
-            or cleaned in PROACTIVE_TOKEN_DENYLIST
-            or len(cleaned) < 2
-            or cleaned.isdigit()
-            or not any(ch.isalpha() or ("가" <= ch <= "힣") for ch in cleaned)
-        ):
-            continue
-        if isinstance(count, bool) or not isinstance(count, (int, float)):
-            continue
-        ranked.append((int(count), cleaned))
-    ranked.sort(reverse=True)
-    return [token for _, token in ranked[:8]]
 
 def _geeknews_cursor_path() -> Path:
     return QUEUE.with_name(GEEKNEWS_CURSOR_NAME)
@@ -16167,19 +16067,6 @@ def _mark_geeknews_digest_confirmed(event: dict, *, now: float | None = None) ->
         newest = max(newest, max(ids) if ids else 0)
     _store_geeknews_seen_ids(ids, newest, now=now, mark_posted_slot=True)
 
-
-def _mark_geeknews_slot_posted(*, now: float | None = None) -> None:
-    cursor = _load_geeknews_cursor()
-    seen_ids = set()
-    values = cursor.get("seen_ids")
-    if isinstance(values, list):
-        for item in values[-200:]:
-            if isinstance(item, int) and not isinstance(item, bool) and item > 0:
-                seen_ids.add(item)
-    newest = cursor.get("newest_id")
-    if not isinstance(newest, int) or isinstance(newest, bool) or newest <= 0:
-        newest = max(seen_ids) if seen_ids else 0
-    _store_geeknews_seen_ids(seen_ids, newest, now=now, mark_posted_slot=True)
 
 def _store_geeknews_seen_ids(
     seen_ids: set[int],
@@ -16345,67 +16232,6 @@ def _next_geeknews_digest(
         "message": message,
         "ids": [item["id"] for item in chosen],
     }
-
-def _proactive_search_hits(query: str) -> list[dict]:
-    """Ask the trusted reply runner for current public links. Never live-sends."""
-    if not runner_is_trusted(force_full=True) or not REPLY_RUNNER.exists():
-        return []
-    prompt = (
-        "Return only JSON array of up to 2 public news or trend links. "
-        f"Query: {query}. Each item: {{\"title\":\"...\",\"url\":\"https://...\"}}."
-    )
-    command = [
-        str(REPLY_RUNNER),
-        "-p",
-        "--no-session",
-        "--no-rules",
-        "--no-lsp",
-        "--no-title",
-        "--no-pty",
-        "--tools",
-        "web_search",
-        "--mode",
-        "text",
-        "--thinking",
-        _reply_thinking_effort() or "medium",
-    ]
-    active_model = _active_reply_model()
-    if active_model:
-        command.extend(["--model", active_model])
-    try:
-        returncode, stdout_bytes, _ = _run_bounded_process(
-            command,
-            cwd=ROOT,
-            env={"HOME": str(Path.home()), "PATH": "/Users/twoimo/.bun/bin:/usr/bin:/bin:/opt/homebrew/bin"},
-            timeout=45.0,
-            stdout_cap=MAX_MODEL_OUTPUT_BYTES,
-            stderr_cap=MAX_MODEL_STDERR_BYTES,
-        )
-    except (OSError, subprocess.TimeoutExpired, _CaptureOverflow, _CaptureIOError):
-        return []
-    if returncode != 0:
-        return []
-    text = stdout_bytes.decode("utf-8", errors="replace")
-    start = text.find("[")
-    end = text.rfind("]")
-    if start < 0 or end <= start:
-        return []
-    try:
-        parsed = json.loads(text[start : end + 1])
-    except json.JSONDecodeError:
-        return []
-    if not isinstance(parsed, list):
-        return []
-    hits = []
-    for item in parsed[:2]:
-        if not isinstance(item, dict):
-            continue
-        title = str(item.get("title") or "").strip()
-        url = str(item.get("url") or "").strip()
-        if title and url.startswith("https://"):
-            hits.append({"title": title, "url": url})
-    return hits
-
 
 def _load_proactive_vector_profiles() -> tuple[dict | None, dict | None]:
     style_profile = None
