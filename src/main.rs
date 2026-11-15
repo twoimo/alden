@@ -41,6 +41,7 @@ use clap_complete::{generate, Shell};
 use sha2::{Digest, Sha256};
 
 use crate::auth_flow::{set_auth_policy, AuthPolicy};
+use crate::auto_reply_runtime::{leftover_queue_has_unknown_send, validate_private_regular_file};
 use crate::commands::read::ReadCommandOptions;
 use crate::commands::watch::{WatchOptions, WebhookFormat};
 use crate::config::load_config;
@@ -2914,10 +2915,6 @@ fn is_empty_json_array(value: Option<&serde_json::Value>) -> bool {
         .is_some_and(Vec::is_empty)
 }
 
-fn validate_private_regular_file(path: &Path, max_bytes: u64) -> Result<()> {
-    auto_reply_runtime::validate_private_regular_file(path, max_bytes)
-}
-
 const AUTO_REPLY_QUEUE_LEGACY_USER_VERSION: i64 = 0;
 const AUTO_REPLY_QUEUE_JOURNAL_USER_VERSION: i64 = 2;
 const AUTO_REPLY_QUEUE_JOURNAL_MAX_ROWS: i64 = 4096;
@@ -3178,11 +3175,6 @@ fn parse_auto_reply_transition_event_id(value: &str) -> Option<(i64, i64)> {
         .then(|| field.parse::<i64>().expect("validated decimal i64"))
     };
     Some((parse_field(chat_id)?, parse_field(log_id)?))
-}
-
-#[cfg(test)]
-fn is_valid_auto_reply_transition_event_id(value: &str) -> bool {
-    parse_auto_reply_transition_event_id(value).is_some()
 }
 
 fn validate_stopped_clean_queue(queue_path: &Path, expected_chat_id: i64) -> Result<()> {
@@ -3653,10 +3645,6 @@ fn validate_stopped_clean_queue(queue_path: &Path, expected_chat_id: i64) -> Res
     Ok(())
 }
 
-fn leftover_queue_has_unknown_send(queue_path: &Path, expected_chat_id: i64) -> Result<()> {
-    auto_reply_runtime::leftover_queue_has_unknown_send(queue_path, expected_chat_id)
-}
-
 fn leftover_supervisor_is_live(room_root: &Path, target: &local_db::LocalChat) -> Result<bool> {
     let status_path = room_root.join("supervisor-status.json");
     validate_private_regular_file(&status_path, AUTO_REPLY_READINESS_MAX_BYTES)?;
@@ -4098,7 +4086,7 @@ fn enrollment_cursor_authority_for_target(
         }
         let matches = targets
             .iter()
-            .filter(|item| item.get("chat_id").and_then(readiness_integer) == Some(target.chat_id))
+            .filter(|item| item.get("chat_id").and_then(serde_json::Value::as_i64) == Some(target.chat_id))
             .collect::<Vec<_>>();
         if matches.len() > 1 {
             anyhow::bail!("AutoReply enrollment target is duplicated");
@@ -5415,7 +5403,7 @@ fn cli_enrollment_reply_author_bindings(
             .context("CLI enrollment reply-author nickname invalid")?;
         let author_id = value
             .get("author_id")
-            .and_then(readiness_integer)
+            .and_then(serde_json::Value::as_i64)
             .filter(|author_id| 0 < *author_id && *author_id < MAX_INT64)
             .context("CLI enrollment reply-author ID invalid")?;
         if previous_nickname.is_some_and(|previous| previous >= nickname)
@@ -5453,7 +5441,7 @@ fn cli_enrollment_cursor_authority(
             != Some(&serde_json::Value::from(
                 AUTO_REPLY_CURSOR_AUTHORITY_SCHEMA_VERSION,
             ))
-        || authority.get("cursor_floor").and_then(readiness_integer) != Some(cursor_floor)
+        || authority.get("cursor_floor").and_then(serde_json::Value::as_i64) != Some(cursor_floor)
     {
         anyhow::bail!("CLI enrollment cursor authority invalid");
     }
@@ -5463,7 +5451,7 @@ fn cli_enrollment_cursor_authority(
         .context("CLI enrollment cursor authority kind missing")?;
     let attested_tail = authority
         .get("attested_db_last_log_id")
-        .and_then(readiness_integer)
+        .and_then(serde_json::Value::as_i64)
         .filter(|value| 0 <= *value && *value < MAX_INT64)
         .context("CLI enrollment cursor authority tail invalid")?;
     let prior_owner = authority.get("prior_owner_id");
@@ -5483,7 +5471,7 @@ fn cli_enrollment_cursor_authority(
                     .and_then(serde_json::Value::as_str)
                     .is_none_or(str::is_empty)
                 || prior_epoch
-                    .and_then(readiness_integer)
+                    .and_then(serde_json::Value::as_i64)
                     .is_none_or(|value| !(1..MAX_INT64).contains(&value))
             {
                 anyhow::bail!("CLI replay cursor authority invalid");
@@ -5515,7 +5503,7 @@ fn validate_cli_enrollment_authority(
         .context("CLI enrollment targets invalid")?;
     let matching_targets = targets
         .iter()
-        .filter(|item| item.get("chat_id").and_then(readiness_integer) == Some(target))
+        .filter(|item| item.get("chat_id").and_then(serde_json::Value::as_i64) == Some(target))
         .collect::<Vec<_>>();
     if matching_targets.len() != 1 {
         anyhow::bail!("CLI enrollment target missing or ambiguous");
@@ -5539,7 +5527,7 @@ fn validate_cli_enrollment_authority(
         .get("chat_name")
         .and_then(serde_json::Value::as_str)
         != Some(chat_name)
-        || enrolled.get("last_log_id").and_then(readiness_integer) != Some(cursor_floor)
+        || enrolled.get("last_log_id").and_then(serde_json::Value::as_i64) != Some(cursor_floor)
     {
         anyhow::bail!("CLI enrollment target identity does not match DB readiness");
     }
@@ -5618,11 +5606,11 @@ fn validate_cli_enrollment_authority(
                 .collect::<std::collections::BTreeSet<_>>();
             let matched_utf8_bytes = identity
                 .get("matched_utf8_bytes")
-                .and_then(readiness_integer)
+                .and_then(serde_json::Value::as_i64)
                 .unwrap_or(-1);
             let attested_db_last_log_id = identity
                 .get("attested_db_last_log_id")
-                .and_then(readiness_integer)
+                .and_then(serde_json::Value::as_i64)
                 .unwrap_or(-1);
             let transcript_sha256 = identity
                 .get("transcript_sha256")
@@ -5632,7 +5620,7 @@ fn validate_cli_enrollment_authority(
                 || !json_object_has_exact_keys(identity, &expected_keys)
                 || !(2..=20).contains(&parsed_log_ids.len())
                 || unique_log_ids.len() != parsed_log_ids.len()
-                || identity.get("matched_count").and_then(readiness_integer)
+                || identity.get("matched_count").and_then(serde_json::Value::as_i64)
                     != Some(parsed_log_ids.len() as i64)
                 || matched_utf8_bytes < 0
                 || (parsed_log_ids.len() >= 3 && matched_utf8_bytes < 24)
@@ -5670,7 +5658,7 @@ fn require_cli_enrolled_reply_author(
         .context("CLI enrollment targets invalid")?;
     let matches = targets
         .iter()
-        .filter(|item| item.get("chat_id").and_then(readiness_integer) == Some(target))
+        .filter(|item| item.get("chat_id").and_then(serde_json::Value::as_i64) == Some(target))
         .collect::<Vec<_>>();
     if matches.len() != 1 {
         anyhow::bail!("CLI enrollment target missing or ambiguous");
@@ -5680,10 +5668,6 @@ fn require_cli_enrolled_reply_author(
         anyhow::bail!("scheduled reply author identity drifted; re-enrollment is required");
     }
     Ok(())
-}
-
-fn readiness_integer(value: &serde_json::Value) -> Option<i64> {
-    value.as_i64()
 }
 
 fn readiness_fresh(value: &serde_json::Value, now: f64) -> bool {
@@ -5726,16 +5710,15 @@ fn require_persisted_auto_reply_readiness(
     if expected_owner.is_some_and(|expected| owner != expected) {
         anyhow::bail!("persisted supervisor owner does not match event");
     }
-    let source_epoch = readiness_integer(
-        supervisor
-            .get("source_epoch")
-            .context("supervisor source epoch missing")?,
-    )
+    let source_epoch = supervisor
+        .get("source_epoch")
+        .context("supervisor source epoch missing")?
+        .as_i64()
     .filter(|value| 0 < *value && *value < MAX_INT64)
     .context("supervisor source epoch invalid")?;
     let target = supervisor
         .get("target_chat_id")
-        .and_then(readiness_integer)
+        .and_then(serde_json::Value::as_i64)
         .filter(|value| 0 < *value && *value < MAX_INT64)
         .context("supervisor target chat missing")?;
     let chat_name = supervisor
@@ -5792,7 +5775,7 @@ fn require_persisted_auto_reply_readiness(
         || supervisor.get("ax_state") != Some(&serde_json::Value::String("healthy".to_string()))
         || supervisor
             .get("ax_pid")
-            .and_then(readiness_integer)
+            .and_then(serde_json::Value::as_i64)
             .filter(|value| 0 < *value && *value < MAX_INT64)
             .is_none()
         || supervisor.get("ax_allow_send") != Some(&serde_json::Value::Bool(false))
@@ -5831,12 +5814,12 @@ fn require_persisted_auto_reply_readiness(
     }
     let db_epoch = db_state
         .get("source_epoch")
-        .and_then(readiness_integer)
+        .and_then(serde_json::Value::as_i64)
         .filter(|value| 0 < *value && *value < MAX_INT64)
         .context("DB source epoch invalid")?;
     let db_target = db_state
         .get("target_chat_id")
-        .and_then(readiness_integer)
+        .and_then(serde_json::Value::as_i64)
         .filter(|value| 0 < *value && *value < MAX_INT64)
         .context("DB target chat missing")?;
     let cli_state_v3 = std::env::var("OPENKAKAO_AUTO_REPLY_CLI").as_deref() == Ok("1");
@@ -5869,13 +5852,13 @@ fn require_persisted_auto_reply_readiness(
     }
     let watermark = db_state
         .get("acked_watermark")
-        .and_then(readiness_integer)
+        .and_then(serde_json::Value::as_i64)
         .filter(|value| 0 <= *value && *value < MAX_INT64)
         .context("DB watermark invalid")?;
     if cli_state_v3 {
         let cursor_floor = db_state
             .get("cursor_floor")
-            .and_then(readiness_integer)
+            .and_then(serde_json::Value::as_i64)
             .filter(|value| 0 <= *value && *value < MAX_INT64)
             .context("CLI DB cursor floor invalid")?;
         if cursor_floor > watermark
@@ -5908,7 +5891,7 @@ fn require_persisted_auto_reply_readiness(
     }
     let persisted_last_observed = db_state
         .get("last_observed_log_id")
-        .and_then(readiness_integer)
+        .and_then(serde_json::Value::as_i64)
         .filter(|value| watermark <= *value && *value < MAX_INT64)
         .context("DB observed watermark invalid")?;
     if expected_last_observed.is_some_and(|expected| persisted_last_observed < expected) {
@@ -5950,7 +5933,7 @@ fn require_persisted_auto_reply_readiness(
         || watermark != acked_set.iter().next_back().copied().unwrap_or(0)
         || db_state
             .get("last_observed_log_id")
-            .and_then(readiness_integer)
+            .and_then(serde_json::Value::as_i64)
             != Some(expected_last_observed)
     {
         anyhow::bail!("DB readiness cursor sets invalid");
@@ -10669,10 +10652,11 @@ connection.close()
 
     #[test]
     fn stopped_clean_queue_rejects_v2_invalid_journal_metadata() {
-        assert!(is_valid_auto_reply_transition_event_id("db:1:1"));
-        assert!(is_valid_auto_reply_transition_event_id(
-            "db:9223372036854775806:9223372036854775806"
-        ));
+        assert!(parse_auto_reply_transition_event_id("db:1:1").is_some());
+        assert!(
+            parse_auto_reply_transition_event_id("db:9223372036854775806:9223372036854775806")
+                .is_some()
+        );
         for invalid in [
             "db:0:1",
             "db:01:1",
@@ -10684,7 +10668,7 @@ connection.close()
             "db:9223372036854775807:1",
             "db:1:9223372036854775807",
         ] {
-            assert!(!is_valid_auto_reply_transition_event_id(invalid));
+            assert!(parse_auto_reply_transition_event_id(invalid).is_none());
         }
         let root = tempfile::tempdir().unwrap();
         let room = stopped_clean_queue_test_room(root.path());
