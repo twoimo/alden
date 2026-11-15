@@ -12291,7 +12291,6 @@ print(json.dumps({
                     self.assertTrue(module.enqueue_event(second))
                     return False
 
-                conversation = mock.Mock(side_effect=[False, False])
                 with (
                     mock.patch.object(
                         module,
@@ -12315,11 +12314,6 @@ print(json.dumps({
                     ),
                     mock.patch.object(
                         module,
-                        "conversation_advanced_past_event",
-                        conversation,
-                    ),
-                    mock.patch.object(
-                        module,
                         "pre_ax_delivery_probe",
                         return_value={"result": "ready"},
                     ),
@@ -12327,7 +12321,7 @@ print(json.dumps({
                         module,
                         "send_reply",
                         side_effect=fail_after_sending,
-                    ),
+                    ) as send,
                     mock.patch.object(
                         module,
                         "durable_policy_skip",
@@ -12359,7 +12353,7 @@ print(json.dumps({
                         "delivery_unknown",
                     ),
                 )
-                self.assertEqual(conversation.call_count, 2)
+                send.assert_called_once()
                 skip_audit.assert_not_called()
             finally:
                 connection.close()
