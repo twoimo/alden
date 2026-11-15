@@ -70,7 +70,6 @@ class SessionMonitorTests(unittest.TestCase):
                 [
                     "/usr/bin/open",
                     "-g",
-                    "-j",
                     "-b",
                     "com.apple.Terminal",
                     str(command),
@@ -93,6 +92,25 @@ class SessionMonitorTests(unittest.TestCase):
             self.assertEqual(status["command_sha256"], digest)
             self.assertEqual(status["launches_unix_ns"], [1_000_000_000_000])
             self.assertEqual(status_path.stat().st_mode & 0o777, 0o600)
+
+    def test_terminal_launch_never_asks_launchservices_to_hide_terminal(self):
+        # open(1) documents `-j, --hide  Launches the app hidden.`; both
+        # spellings hide an already-running Terminal and its windows.
+        module = load(MONITOR, "session_monitor_no_hide")
+        with tempfile.TemporaryDirectory() as temporary:
+            state, command, manifest, _ = self.fixture(Path(temporary))
+            calls = []
+
+            def runner(argv, **_kwargs):
+                calls.append(list(argv))
+                return subprocess.CompletedProcess(argv, 0, b"", b"")
+
+            module.run_once(manifest, state, now_ns=1_500_000_000_000, runner=runner)
+            open_call = next(argv for argv in calls if argv[0] == "/usr/bin/open")
+            self.assertIn("-g", open_call)
+            self.assertNotIn("-j", open_call)
+            self.assertNotIn("--hide", open_call)
+            self.assertEqual(open_call[-1], str(command))
 
     def test_held_watchdog_lock_never_opens_terminal(self):
         module = load(MONITOR, "session_monitor_lock")
