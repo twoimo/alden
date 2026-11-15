@@ -10403,9 +10403,9 @@ def _pre_mutation_send_hold(
 ) -> str | None:
     """Last hold check that can still prevent the composing mutation.
 
-    The read-only preflight and the composer allowlist write can take seconds,
-    so a draft that was valid when the job was claimed can age out, or the room
-    can move on, before the mutation runs. Committing ``sending`` has no way
+    The read-only preflight can take seconds, so a draft that was valid when
+    the job was claimed can age out, or the room can move on, before the
+    mutation runs. Committing ``sending`` has no way
     back, which is why this runs immediately before it (AHP:
     intervention_timing).
     """
@@ -13691,7 +13691,6 @@ def send_reply(
     if inbound_quote:
         command.extend(["--reply-to", inbound_quote])
     composer_allowlist_path = Path(str(QUEUE)).parent / "composer-allowlist.json"
-    _allow_composer_draft(composer_allowlist_path, reply)
     worker_environment = _local_send_environment(
         event, expected_target_chat_id, composer_allowlist_path
     )
@@ -13759,6 +13758,9 @@ def send_reply(
         )
         if transition != "updated":
             return False
+    # Only now may this reply end up in the composer, so only now may the CLI
+    # treat a composer holding it as the worker's own leftover.
+    _allow_composer_draft(composer_allowlist_path, reply)
     try:
         returncode, stdout_bytes, _ = _run_bounded_process(
             command,
