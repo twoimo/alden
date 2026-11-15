@@ -12336,6 +12336,28 @@ def generate_reply(
         for path in normalized_image_paths:
             command.append(f"@{path}")
         model_stdin_bytes = gjc_stdin_prefix + prompt_bytes
+
+    def run_fallback_candidate(candidate: str) -> tuple[int, bytes, bytes]:
+        return _run_generation_candidate(
+            candidate,
+            system_prompt,
+            prompt_bytes,
+            command=command,
+            env=env,
+            model_stdin_bytes=model_stdin_bytes,
+            image_paths=normalized_image_paths,
+            timeout=_model_generation_timeout(candidate, deadline=generation_deadline),
+        )
+
+    def fallback_winner() -> dict | None:
+        """Ask the fallback chain for an answer in place of the failing model."""
+        return _model_fallback_chain(
+            active_model,
+            run_fallback_candidate,
+            deadline=generation_deadline,
+            turn_guard=turn_hold,
+        )
+
     held = turn_hold()
     if held:
         return held
@@ -12362,40 +12384,7 @@ def generate_reply(
         failure_class = str(slot["failure_class"])
         retry_at = float(slot["retry_at"])
         if not _capacity_probe and failure_class not in {"call_in_flight", "circuit_state_invalid"}:
-            if REPLY_RUNNER_KIND == "opencodex":
-                winner = _model_fallback_chain(
-                    active_model,
-                    lambda candidate: _run_generation_candidate(
-                        candidate,
-                        system_prompt,
-                        prompt_bytes,
-                        command=command,
-                        env=env,
-                        model_stdin_bytes=model_stdin_bytes,
-                        image_paths=normalized_image_paths,
-                        timeout=_model_generation_timeout(
-                            candidate, deadline=generation_deadline
-                        ),
-                    ),
-                    deadline=generation_deadline,
-                    turn_guard=turn_hold,
-                )
-            else:
-                winner = _model_fallback_chain(
-                    active_model,
-                    lambda candidate: _run_generation_candidate(
-                        candidate,
-                        system_prompt,
-                        prompt_bytes,
-                        command=command,
-                        env=env,
-                        model_stdin_bytes=model_stdin_bytes,
-                        image_paths=normalized_image_paths,
-                        timeout=_model_generation_timeout(candidate, deadline=generation_deadline),
-                    ),
-                    deadline=generation_deadline,
-                    turn_guard=turn_hold,
-                )
+            winner = fallback_winner()
             if winner is not None:
                 slot = {
                     "allowed": True,
@@ -12472,6 +12461,30 @@ def generate_reply(
             )
         )
 
+    def continue_on_fallback(
+        winner: dict,
+        label: str,
+        failed_class: str,
+        failed_retry_after: float | None = None,
+    ) -> None:
+        """Close the failed attempt, then run the rest of the turn on the winner's lease."""
+        nonlocal lease_token, lease_retry_at, returncode, stdout_bytes, stderr_bytes, active_model
+        _close_model_lease(
+            lease_token, active_model, failed_class,
+            retry_after_seconds=failed_retry_after,
+        )
+        lease_token = winner["lease_token"]
+        lease_retry_at = winner["retry_at"]
+        returncode = winner["returncode"]
+        stdout_bytes = winner["stdout"]
+        stderr_bytes = winner["stderr"]
+        active_model = winner["model"]
+        print(
+            f"[reply-gen] {label} answered on {active_model}",
+            file=sys.stderr,
+            flush=True,
+        )
+
     try:
         if not cooldown_fallback_answered and generation_deadline <= time.monotonic():
             return fail_model_call("runner_timeout")
@@ -12500,44 +12513,14 @@ def generate_reply(
                     or "quota" in err_str
                     or failure_class in MODEL_CIRCUIT_FAILURE_CLASSES
                 ):
-                    winner = _model_fallback_chain(
-                        active_model,
-                        lambda candidate: _run_generation_candidate(
-                            candidate,
-                            system_prompt,
-                            prompt_bytes,
-                            command=command,
-                            env=env,
-                            model_stdin_bytes=model_stdin_bytes,
-                            image_paths=normalized_image_paths,
-                            timeout=_model_generation_timeout(candidate, deadline=generation_deadline),
-                        ),
-                        deadline=generation_deadline,
-                        turn_guard=turn_hold,
-                    )
+                    winner = fallback_winner()
                     if winner is not None:
-                        # The fallback answered. Close the first attempt, then run
-                        # the rest of the turn on the lease that generated it.
                         first_class, first_retry = _classify_model_failure(
                             returncode,
                             stdout_bytes,
                             stderr_bytes,
                         )
-                        _close_model_lease(
-                            lease_token, active_model, first_class,
-                            retry_after_seconds=first_retry,
-                        )
-                        lease_token = winner["lease_token"]
-                        lease_retry_at = winner["retry_at"]
-                        returncode = winner["returncode"]
-                        stdout_bytes = winner["stdout"]
-                        stderr_bytes = winner["stderr"]
-                        active_model = winner["model"]
-                        print(
-                            f"[reply-gen] fallback answered on {active_model}",
-                            file=sys.stderr,
-                            flush=True,
-                        )
+                        continue_on_fallback(winner, "fallback", first_class, first_retry)
         else:
             # 같은 이유로 기본 실행기도 건너뛴다. 쿨다운 폴백이 이미 답한
             # 턴에서 주 모델을 다시 부르면 성공한 답이 버려지고 토큰이 두 번
@@ -12579,43 +12562,12 @@ def generate_reply(
         # ever consulted, so a slow provider defeated the whole point of having
         # fallbacks. Give the chain one bounded chance first (2026-09-15).
         if REPLY_RUNNER_KIND != "opencodex":
-            def _run_timeout_candidate(
-                candidate: str,
-                _command: list[str] = command,
-            ) -> tuple:
-                return _run_generation_candidate(
-                    candidate,
-                    system_prompt,
-                    prompt_bytes,
-                    command=_command,
-                    env=env,
-                    model_stdin_bytes=model_stdin_bytes,
-                    image_paths=normalized_image_paths,
-                    timeout=_model_generation_timeout(candidate, deadline=generation_deadline),
-                )
-
             try:
-                winner = _model_fallback_chain(
-                    active_model,
-                    _run_timeout_candidate,
-                    deadline=generation_deadline,
-                    turn_guard=turn_hold,
-                )
+                winner = fallback_winner()
             except Exception:
                 winner = None
             if winner is not None:
-                _close_model_lease(lease_token, active_model, "runner_timeout")
-                lease_token = winner["lease_token"]
-                lease_retry_at = winner["retry_at"]
-                returncode = winner["returncode"]
-                stdout_bytes = winner["stdout"]
-                stderr_bytes = winner["stderr"]
-                active_model = winner["model"]
-                print(
-                    f"[reply-gen] timeout_fallback answered on {active_model}",
-                    file=sys.stderr,
-                    flush=True,
-                )
+                continue_on_fallback(winner, "timeout_fallback", "runner_timeout")
             else:
                 return fail_model_call("runner_timeout")
         else:
@@ -12646,46 +12598,15 @@ def generate_reply(
             m in err_msg for m in ("usage limit", "weekly limit", "daily limit", "429", "timed out", "unauthorized", "missing api key")
         )
         if is_opencode and is_limit and REPLY_RUNNER_KIND != "opencodex":
-            def _run_candidate(candidate: str, _command: list[str] = command) -> tuple:
-                return _run_generation_candidate(
-                    candidate,
-                    system_prompt,
-                    prompt_bytes,
-                    command=_command,
-                    env=env,
-                    model_stdin_bytes=model_stdin_bytes,
-                    image_paths=normalized_image_paths,
-                    timeout=_model_generation_timeout(candidate, deadline=generation_deadline),
-                )
-
-            winner = _model_fallback_chain(
-                active_model,
-                _run_candidate,
-                deadline=generation_deadline,
-                turn_guard=turn_hold,
-            )
+            winner = fallback_winner()
             if winner is not None:
-                # The fallback answered. Close the first attempt, then run the
-                # rest of the turn on the lease that generated it.
                 first_class, first_retry = _classify_model_failure(
                     returncode,
                     stdout_bytes,
                     stderr_bytes,
                 )
-                _close_model_lease(
-                    lease_token, active_model, first_class,
-                    retry_after_seconds=first_retry,
-                )
-                lease_token = winner["lease_token"]
-                lease_retry_at = winner["retry_at"]
-                returncode = winner["returncode"]
-                stdout_bytes = winner["stdout"]
-                stderr_bytes = winner["stderr"]
-                active_model = winner["model"]
-                print(
-                    f"[reply-gen] opencode_go_quota_fallback answered on {active_model}",
-                    file=sys.stderr,
-                    flush=True,
+                continue_on_fallback(
+                    winner, "opencode_go_quota_fallback", first_class, first_retry
                 )
 
     held = turn_hold()
