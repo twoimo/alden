@@ -1127,9 +1127,11 @@ const KAKAO_DATABASE_DIR: &str =
 
 fn find_database_path(db_name: &str) -> Result<PathBuf> {
     let home = dirs::home_dir().context("No home directory")?;
-    let container_dir = home.join(KAKAO_DATABASE_DIR);
+    find_database_path_in(&home.join(KAKAO_DATABASE_DIR), db_name)
+}
 
-    let container_metadata = std::fs::symlink_metadata(&container_dir)?;
+fn find_database_path_in(container_dir: &Path, db_name: &str) -> Result<PathBuf> {
+    let container_metadata = std::fs::symlink_metadata(container_dir)?;
     if !container_metadata.is_dir() {
         anyhow::bail!("KakaoTalk container directory is not a regular directory");
     }
@@ -1166,7 +1168,7 @@ fn find_database_path(db_name: &str) -> Result<PathBuf> {
 
     // Look for a FILE (not directory) matching the derived database name.
     // Must check it's a regular file — KakaoTalk also creates hex-named directories.
-    if let Ok(entries) = std::fs::read_dir(&container_dir) {
+    if let Ok(entries) = std::fs::read_dir(container_dir) {
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
             let path = entry.path();
@@ -3347,6 +3349,62 @@ mod tests {
             let link = dir.path().join("linked-identity.json");
             std::os::unix::fs::symlink(&path, &link).expect("symlink cache entry");
             assert_eq!(both(&link, "device-a"), (None, None), "symlinked entry");
+        }
+    }
+
+    #[test]
+    fn database_lookup_accepts_only_an_owner_controlled_regular_file_in_the_container() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        // The container path itself must not traverse a symlink (macOS temp
+        // directories live behind /var -> /private/var).
+        let container = tempdir.path().canonicalize().expect("canonical tempdir");
+        let name = "0f1e2d3c";
+        let target = container.join(name);
+        let not_found = format!(
+            "KakaoTalk database not found in {}. Derived name: {name}",
+            container.display()
+        );
+        let lookup = || find_database_path_in(&container, name).map_err(|error| error.to_string());
+
+        assert_eq!(lookup(), Err(not_found.clone()), "missing");
+
+        std::fs::create_dir(&target).expect("hex-named directory");
+        assert_eq!(lookup(), Err(not_found.clone()), "directory");
+        std::fs::remove_dir(&target).expect("remove directory");
+
+        std::fs::write(&target, b"db").expect("database file");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o644))
+                .expect("owner-writable mode");
+        }
+        assert_eq!(lookup(), Ok(target.clone()));
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o664))
+                .expect("group-writable mode");
+            assert_eq!(lookup(), Err(not_found.clone()), "group-writable");
+            std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o646))
+                .expect("world-writable mode");
+            assert_eq!(lookup(), Err(not_found.clone()), "world-writable");
+
+            std::fs::remove_file(&target).expect("remove database file");
+            let outside = tempfile::NamedTempFile::new().expect("outside file");
+            std::os::unix::fs::symlink(outside.path(), &target).expect("symlinked name");
+            assert_eq!(lookup(), Err(not_found.clone()), "symlink");
+            std::fs::remove_file(&target).expect("remove symlink");
+
+            let linked_container = tempdir.path().join("linked-container");
+            std::fs::create_dir(container.join("real")).expect("real container");
+            std::os::unix::fs::symlink(container.join("real"), &linked_container)
+                .expect("symlinked container");
+            assert_eq!(
+                find_database_path_in(&linked_container, name).map_err(|e| e.to_string()),
+                Err("KakaoTalk container directory is not a regular directory".to_string())
+            );
         }
     }
 
