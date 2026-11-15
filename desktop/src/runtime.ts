@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { CancellationToken, RuntimeSnapshot } from "./contracts";
-import { parseRuntimeSnapshot, unavailableSnapshot } from "./contracts";
+import { parseRuntimeSnapshot, record, unavailableSnapshot } from "./contracts";
 import { RESIDENT_MODEL_ID, SWAP_MODEL_ID } from "./tokens";
 
 type SettingsAction =
@@ -98,26 +98,22 @@ function validBrowserToolInput(input: BrowserToolInput, token: CancellationToken
 }
 
 function parseBrowserToolResult(value: unknown): BrowserToolResult {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  const payload = record(value);
+  if (!payload || Object.keys(payload).sort().join(",") !== "errorCode,ok,result,status") {
     return failedBrowserTool("browser_bridge_unavailable");
   }
-  const record = value as Record<string, unknown>;
-  const keys = Object.keys(record).sort();
-  if (keys.join(",") !== "errorCode,ok,result,status") {
-    return failedBrowserTool("browser_bridge_unavailable");
-  }
-  const status = typeof record.status === "string" && BROWSER_TOOL_STATUSES.has(record.status as BrowserToolStatus)
-    ? record.status as BrowserToolStatus
+  const status = typeof payload.status === "string" && BROWSER_TOOL_STATUSES.has(payload.status as BrowserToolStatus)
+    ? payload.status as BrowserToolStatus
     : null;
-  const errorCode = typeof record.errorCode === "string" ? record.errorCode : "";
-  const result = typeof record.result === "string" ? record.result : null;
+  const errorCode = typeof payload.errorCode === "string" ? payload.errorCode : "";
+  const result = typeof payload.result === "string" ? payload.result : null;
   if (!status || result === null || new TextEncoder().encode(result).byteLength > BROWSER_TOOL_RESULT_LIMIT_BYTES) {
     return failedBrowserTool("browser_result_invalid");
   }
-  if (record.ok === true && status === "completed" && errorCode === "") {
+  if (payload.ok === true && status === "completed" && errorCode === "") {
     return { ok: true, status, errorCode, result };
   }
-  if (record.ok !== false || !BROWSER_TOOL_ERROR_CODES.has(errorCode) || result !== "") {
+  if (payload.ok !== false || !BROWSER_TOOL_ERROR_CODES.has(errorCode) || result !== "") {
     return failedBrowserTool("browser_bridge_unavailable");
   }
   return { ok: false, status, errorCode, result: "" };
@@ -174,12 +170,12 @@ function parseModelAction(
   action: ModelAction,
   model: LocalModelId,
 ): ModelActionResult {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return failedModelAction(action, model);
-  const record = value as Record<string, unknown>;
-  const contractMatches = record.ok === true && record.action === action && record.model === model;
-  const stored = record.stored === true;
-  const prepared = record.prepared === true;
-  const needsPrepare = record.needs_prepare === true;
+  const payload = record(value);
+  if (!payload) return failedModelAction(action, model);
+  const contractMatches = payload.ok === true && payload.action === action && payload.model === model;
+  const stored = payload.stored === true;
+  const prepared = payload.prepared === true;
+  const needsPrepare = payload.needs_prepare === true;
   const completed = action === "model-set" ? stored : prepared;
   if (!contractMatches || !completed) return failedModelAction(action, model);
   return { ok: true, action, model, stored, prepared, needsPrepare };
@@ -235,22 +231,21 @@ function failedModelSwap(reason = "model_owner_unknown", stage = "failed"): Mode
 }
 
 function parseModelSwapAction(value: unknown): ModelSwapActionResult {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return failedModelSwap();
-  const record = value as Record<string, unknown>;
-  if (record.action !== "model-swap" || record.model !== SWAP_MODEL_ID) return failedModelSwap();
-  const stage = typeof record.stage === "string" && MODEL_SWAP_STAGES.has(record.stage)
-    ? record.stage
+  const payload = record(value);
+  if (!payload || payload.action !== "model-swap" || payload.model !== SWAP_MODEL_ID) return failedModelSwap();
+  const stage = typeof payload.stage === "string" && MODEL_SWAP_STAGES.has(payload.stage)
+    ? payload.stage
     : "failed";
-  const reason = typeof record.reason === "string" && MODEL_SWAP_REASONS.has(record.reason)
-    ? record.reason
+  const reason = typeof payload.reason === "string" && MODEL_SWAP_REASONS.has(payload.reason)
+    ? payload.reason
     : "model_owner_unknown";
-  const stages = Array.isArray(record.stages)
-    ? record.stages.filter((item): item is string => typeof item === "string" && MODEL_SWAP_STAGES.has(item)).slice(0, 12)
+  const stages = Array.isArray(payload.stages)
+    ? payload.stages.filter((item): item is string => typeof item === "string" && MODEL_SWAP_STAGES.has(item)).slice(0, 12)
     : [];
-  const stored = record.stored === true;
-  const prepared = record.prepared === true;
+  const stored = payload.stored === true;
+  const prepared = payload.prepared === true;
   return {
-    ok: record.ok === true && stage === "ready" && stored && prepared
+    ok: payload.ok === true && stage === "ready" && stored && prepared
       && (reason === "ready" || reason === "already_resident"),
     action: "model-swap",
     model: SWAP_MODEL_ID,

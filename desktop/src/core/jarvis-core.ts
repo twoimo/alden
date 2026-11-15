@@ -4,18 +4,11 @@ import type { SourceLoads } from "./load-mapping";
 import { createNucleusMaterial } from "./nucleus-material";
 import { buildPulseLattice, pulseLatticeDrawCount } from "./pulse-lattice";
 import { CoreRenderState, ringTilt } from "./render-state";
+import { cssColor, disposeObject, spherePoint } from "./scene-helpers";
 
 const NEURON_COUNT = 96;
 const SYNAPSES_PER_NEURON = 3;
 const PARTICLE_COUNT = 30;
-
-function spherePoint(index: number, count: number, radius: number): THREE.Vector3 {
-  const offset = 2 / count;
-  const y = (index * offset - 1) + offset / 2;
-  const r = Math.sqrt(Math.max(0, 1 - y * y));
-  const phi = index * Math.PI * (3 - Math.sqrt(5));
-  return new THREE.Vector3(Math.cos(phi) * r * radius, y * radius, Math.sin(phi) * r * radius);
-}
 
 export class JarvisCore {
   private readonly renderer: THREE.WebGLRenderer;
@@ -44,8 +37,8 @@ export class JarvisCore {
     this.camera.position.set(0, 0, 4.25);
     this.scene.add(this.root);
 
-    const accent = new THREE.Color(getComputedStyle(document.documentElement).getPropertyValue("--accent").trim() || "#B88A45");
-    const muted = new THREE.Color(getComputedStyle(document.documentElement).getPropertyValue("--muted").trim() || "#6D655B");
+    const accent = cssColor("--accent", "#B88A45");
+    const muted = cssColor("--muted", "#6D655B");
 
     const ringGeometry = new THREE.TorusGeometry(1.02, 0.012, 8, 96);
     for (let index = 0; index < 3; index += 1) {
@@ -131,13 +124,7 @@ export class JarvisCore {
 
   dispose(): void {
     this.stop();
-    this.scene.traverse((object) => {
-      if (object instanceof THREE.Mesh || object instanceof THREE.Points || object instanceof THREE.LineSegments) {
-        object.geometry.dispose();
-        const materials = Array.isArray(object.material) ? object.material : [object.material];
-        materials.forEach((material) => material.dispose());
-      }
-    });
+    disposeObject(this.scene);
     this.renderer.dispose();
   }
 

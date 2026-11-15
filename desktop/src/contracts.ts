@@ -161,7 +161,7 @@ const PIPELINE_OUTCOMES = new Set<PipelineOutcome>([
   "none", "sent", "skipped", "deferred", "scheduled", "failed", "aborted",
 ]);
 
-function record(value: unknown): JsonRecord | null {
+export function record(value: unknown): JsonRecord | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? (value as JsonRecord)
     : null;
@@ -171,7 +171,7 @@ function list(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
 }
 
-function finiteNumber(value: unknown, fallback = 0): number {
+export function finiteNumber(value: unknown, fallback = 0): number {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
 
@@ -187,7 +187,7 @@ function nonNegativeInt(value: unknown): number {
   return Math.max(0, Math.trunc(finiteNumber(value, 0)));
 }
 
-function text(value: unknown, fallback = ""): string {
+export function text(value: unknown, fallback = ""): string {
   return typeof value === "string" ? value : fallback;
 }
 

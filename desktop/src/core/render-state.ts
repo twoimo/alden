@@ -1,4 +1,5 @@
 import {
+  clamp01,
   writeLatticePulse,
   writeRingTargetVelocities,
   type LatticePulse,
@@ -67,16 +68,15 @@ export class CoreRenderState {
 
   /** Clamp and store the incoming load signals. Never throws on bad input. */
   setSignals(jobLoad: number, voiceRms: number, sources?: SourceLoads): void {
-    const safe = (value: number): number => Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : 0;
-    this.targetLoad = safe(jobLoad);
-    this.targetVoiceRms = safe(voiceRms);
+    this.targetLoad = clamp01(jobLoad);
+    this.targetVoiceRms = clamp01(voiceRms);
     const target = this.targetSources;
     target.voice = this.targetVoiceRms;
     if (sources) {
-      target.reply = safe(sources.reply);
-      target.geeknews = safe(sources.geeknews);
-      target.dbSync = safe(sources.dbSync);
-      target.total = Math.max(safe(sources.total), this.targetLoad, target.voice);
+      target.reply = clamp01(sources.reply);
+      target.geeknews = clamp01(sources.geeknews);
+      target.dbSync = clamp01(sources.dbSync);
+      target.total = Math.max(clamp01(sources.total), this.targetLoad, target.voice);
       return;
     }
     target.reply = this.targetLoad;

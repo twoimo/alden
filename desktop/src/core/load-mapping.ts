@@ -34,7 +34,7 @@ const PIPELINE_STAGE_WEIGHTS: Readonly<Record<string, number>> = {
   confirm: 0.25,
 };
 
-function clamp01(value: number): number {
+export function clamp01(value: number): number {
   if (!Number.isFinite(value)) return 0;
   return Math.min(1, Math.max(0, value));
 }
