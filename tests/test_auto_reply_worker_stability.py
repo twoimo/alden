@@ -309,6 +309,27 @@ class GeekNewsCursorTests(unittest.TestCase):
         seen = self.worker._load_geeknews_seen_ids()
         self.assertTrue({10, 11, 20, 21} <= seen, f"lost a confirmed post: {sorted(seen)}")
 
+    @unittest.expectedFailure
+    def test_a_late_confirmation_marks_the_slot_the_post_belongs_to(self):
+        morning = self.slot_time("morning")
+        lunch = self.slot_time("lunch")
+        self.worker._mark_geeknews_digest_confirmed(
+            {
+                "proactive_ids": [10],
+                "proactive_query": "geeknews-rss",
+                "sent_at": int(morning),
+            },
+            now=lunch,
+        )
+        self.assertFalse(
+            self.worker._geeknews_slot_open(morning + 60),
+            "the morning post did not close the morning slot",
+        )
+        self.assertTrue(
+            self.worker._geeknews_slot_open(lunch + 60),
+            "a morning post confirmed late burned the lunch slot",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
