@@ -395,7 +395,7 @@ with mock.patch.object(
 
     def test_local_mlx_probe_timeout_covers_cold_start_within_service_budget(self):
         module = load_entry("auto_reply_probe_budget_test")
-        source = (ROOT / "src" / "main.rs").read_text(encoding="utf-8")
+        source = (ROOT / "src" / "commands" / "auto_reply" / "llm.rs").read_text(encoding="utf-8")
         marker = "const LOCAL_MLX_PROBE_TIMEOUT: Duration = Duration::from_secs("
         start = source.index(marker) + len(marker)
         end = source.index(");", start)
