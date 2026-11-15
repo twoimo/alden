@@ -15806,6 +15806,7 @@ GEEKNEWS_FEED_MAX_BYTES = 400_000
 GEEKNEWS_FEED_TIMEOUT_SECONDS = 8.0
 GEEKNEWS_CONFIRMATION_READ_COUNT = 100
 GEEKNEWS_CONFIRMATION_TIMEOUT_SECONDS = 8.0
+GEEKNEWS_SEND_TIMEOUT_SECONDS = 60.0
 GEEKNEWS_SLOT_TZ = ZoneInfo("Asia/Seoul")
 GEEKNEWS_DAILY_SLOTS = (
     ("morning", 8, 40, 20),
@@ -17177,8 +17178,13 @@ def main() -> int:
     return ack_return("accepted", fingerprint)
 
 
-def _geeknews_confirmation_chat_id(chat: str, queue_path: Path) -> int | None:
-    """Resolve a numeric readback target from the explicit chat or queue path."""
+def _geeknews_operator_room(chat: str, queue_path: Path) -> tuple[int, str] | None:
+    """Return (chat_id, window title) when --chat names the --queue room.
+
+    local-send targets a window title and the readback a numeric room, so
+    both come from the room catalog entry the session attested as
+    `bind:<id>:<title>`. An unnamed group room has no local-DB name to check.
+    """
 
     def parse(value: object) -> int | None:
         raw = str(value or "").strip()
@@ -17192,12 +17198,26 @@ def _geeknews_confirmation_chat_id(chat: str, queue_path: Path) -> int | None:
             return None
         return parsed if parsed < MAX_INT64 else None
 
-    requested = parse(chat)
+    def title_of(room: dict) -> str:
+        return " ".join(str(room.get("title") or "").split())
+
     queue = Path(queue_path)
-    queued = parse(queue.parent.name) if queue.parent.parent.name == "rooms" else None
-    if requested is not None and queued is not None and requested != queued:
+    if queue.parent.parent.name != "rooms":
         return None
-    return requested or queued
+    chat_id = parse(queue.parent.name)
+    catalog = _read_fence_object(queue.parent.parent.parent / "menubar-room-catalog.json")
+    rooms = catalog[0].get("rooms") if catalog is not None else None
+    if chat_id is None or not isinstance(rooms, list):
+        return None
+    rooms = [room for room in rooms if isinstance(room, dict)]
+    bound = [room for room in rooms if parse(room.get("chat_id")) == chat_id]
+    title = title_of(bound[0]) if len(bound) == 1 else ""
+    if not title or sum(title_of(room) == title for room in rooms) != 1:
+        return None
+    requested = " ".join(str(chat or "").split())
+    if requested != title and parse(requested) != chat_id:
+        return None
+    return chat_id, title
 
 
 def _geeknews_confirmation_rows(bin_path: str, chat_id: int) -> list[dict] | None:
@@ -17256,13 +17276,7 @@ def geeknews_operator_cli(arguments: list[str]) -> int:
     parser.add_argument("--mark-slot", default="")
     parser.add_argument("--bin", default=str(BIN))
     parser.add_argument("--chat", default=CHAT)
-    parser.add_argument(
-        "--queue",
-        default=str(
-            Path.home()
-            / "Library/Application Support/openkakao/auto-reply/rooms/417780809780519/reply-queue.sqlite3"
-        ),
-    )
+    parser.add_argument("--queue", required=True)
     args = parser.parse_args(arguments)
     global QUEUE
     QUEUE = Path(args.queue)
@@ -17276,22 +17290,28 @@ def geeknews_operator_cli(arguments: list[str]) -> int:
         print(message)
         print(f"# ids={ids}", file=sys.stderr)
         return 0
-    confirmation_chat_id = _geeknews_confirmation_chat_id(args.chat, QUEUE)
-    if confirmation_chat_id is None:
-        print("unable to identify exact room; not sent", file=sys.stderr)
+    room = _geeknews_operator_room(args.chat, QUEUE)
+    if room is None:
+        print("--chat is not the catalog room of --queue; not sent", file=sys.stderr)
         return 4
+    confirmation_chat_id, title = room
     baseline_rows = _geeknews_confirmation_rows(args.bin, confirmation_chat_id)
     if baseline_rows is None:
         print("unable to establish room readback baseline; not sent", file=sys.stderr)
         return 4
     baseline_log_id = max((row["log_id"] for row in baseline_rows), default=0)
     send_started_at = int(time.time())
-    completed = subprocess.run(
-        [str(Path(args.bin)), "local-send", str(args.chat), message, "-y", "--json"],
-        check=False,
-    )
-    if completed.returncode != 0:
-        return completed.returncode or 1
+    try:
+        completed = subprocess.run(
+            [str(Path(args.bin)), "local-send", title, message, "-y", "--json"],
+            check=False,
+            timeout=GEEKNEWS_SEND_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        print("local-send timed out; checking the room", file=sys.stderr)
+    else:
+        if completed.returncode != 0:
+            return completed.returncode or 1
     confirmation_log_id = None
     rows = _geeknews_confirmation_rows(args.bin, confirmation_chat_id)
     if rows is not None:

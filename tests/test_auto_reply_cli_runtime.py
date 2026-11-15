@@ -17797,6 +17797,9 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
             mock.patch.object(
                 module, "_next_geeknews_digest", return_value={"message": message, "ids": [10, 11]}
             ),
+            mock.patch.object(
+                module, "_geeknews_operator_room", return_value=(325472527151234, "NIMDA room")
+            ),
             mock.patch.object(module.subprocess, "run", return_value=mock.Mock(returncode=0)) as send,
             mock.patch.object(
                 module,
@@ -17854,6 +17857,9 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
             mock.patch.object(
                 module, "_next_geeknews_digest", return_value={"message": message, "ids": [10]}
             ),
+            mock.patch.object(
+                module, "_geeknews_operator_room", return_value=(325472527151234, "NIMDA room")
+            ),
             mock.patch.object(module.subprocess, "run", return_value=mock.Mock(returncode=0)),
             mock.patch.object(
                 module,
@@ -17890,6 +17896,9 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
         with (
             mock.patch.object(
                 module, "_next_geeknews_digest", return_value={"message": message, "ids": [10]}
+            ),
+            mock.patch.object(
+                module, "_geeknews_operator_room", return_value=(325472527151234, "NIMDA room")
             ),
             mock.patch.object(module.subprocess, "run") as send,
             mock.patch.object(module, "_run_bounded_process", return_value=(1, b"", b"")),

@@ -416,7 +416,6 @@ class GeekNewsOperatorTests(unittest.TestCase):
         self.assertEqual(self.cursor()["seen_ids"], [10, 11, 12])
         self.assertEqual(self.cursor()["posted_slots"], ["2026-08-16:morning"])
 
-    @unittest.expectedFailure
     def test_local_send_is_bounded_by_a_timeout(self):
         result = self.run_operator("--chat", "NIMDA room", "--queue", str(self.queue))
         self.assertEqual(result, 0)
@@ -425,26 +424,22 @@ class GeekNewsOperatorTests(unittest.TestCase):
         self.assertGreater(timeout, 0)
         self.assertLessEqual(timeout, 120)
 
-    @unittest.expectedFailure
     def test_a_timed_out_send_that_never_landed_leaves_the_cursor_alone(self):
         self.send_result = subprocess.TimeoutExpired(["local-send"], 60.0)
         result = self.run_operator("--chat", "NIMDA room", "--queue", str(self.queue))
         self.assertEqual(result, 3)
         self.assertEqual(self.cursor(), {})
 
-    @unittest.expectedFailure
     def test_a_chat_that_is_not_the_queue_room_is_never_sent(self):
         result = self.run_operator("--chat", "Other room", "--queue", str(self.queue))
         self.assertEqual(result, 4)
         self.assertEqual(self.sends, [], "posted to one room while verifying another")
 
-    @unittest.expectedFailure
     def test_a_numeric_chat_sends_to_the_title_bound_to_that_room(self):
         result = self.run_operator("--chat", f"id:{NIMDA}", "--queue", str(self.queue))
         self.assertEqual(result, 0)
         self.assertEqual(self.sends[0][1:3], ["local-send", "NIMDA room"])
 
-    @unittest.expectedFailure
     def test_the_queue_has_no_hard_coded_default_room(self):
         with self.assertRaises(SystemExit):
             self.run_operator("--chat", "NIMDA room")
