@@ -121,12 +121,7 @@ fn classify_worker_local_confirmation(
     if matches.len() == 1 {
         return LocalConfirmationObservation::Confirmed(matches[0].log_id);
     }
-    if matches.len() > 1
-        || envelope
-            .messages
-            .iter()
-            .any(|row| row.is_self && row.log_id > after_log_id)
-    {
+    if matches.len() > 1 {
         return LocalConfirmationObservation::Rejected;
     }
     LocalConfirmationObservation::Pending
@@ -630,6 +625,24 @@ mod tests {
     }
 
     #[test]
+    fn worker_confirmation_outlasts_an_unrelated_self_row_that_lands_first() {
+        let mut room = vec![
+            message(SOURCE_LOG_ID, false, "question"),
+            message(SOURCE_LOG_ID + 1, true, "typed on the phone"),
+        ];
+        let first_poll = room.clone();
+        room.push(message(SOURCE_LOG_ID + 2, true, "reply"));
+
+        let mut polls = 0;
+        let confirmed = await_worker_local_confirmation(CHAT_ID, SOURCE_LOG_ID, "reply", |limit| {
+            polls += 1;
+            let visible = if polls == 1 { &first_poll } else { &room };
+            Some(room_page(visible, limit, SOURCE_LOG_ID))
+        });
+        assert_eq!(confirmed, Some(SOURCE_LOG_ID + 2));
+    }
+
+    #[test]
     fn worker_confirmation_waits_only_for_empty_or_narrow_snapshot_race() {
         let empty = page(Vec::new(), "empty", SOURCE_LOG_ID, 0, false, false);
         assert_eq!(
@@ -691,7 +704,7 @@ mod tests {
     }
 
     #[test]
-    fn worker_confirmation_rejects_identity_message_and_ambiguity_mismatches() {
+    fn worker_confirmation_waits_past_other_rows_and_rejects_duplicates() {
         let incoming = page(
             vec![message(REPLY_LOG_ID, false, "reply")],
             "complete",
@@ -705,7 +718,7 @@ mod tests {
             LocalConfirmationObservation::Pending
         );
 
-        let wrong_body = page(
+        let other_self_row = page(
             vec![message(REPLY_LOG_ID, true, "different")],
             "complete",
             REPLY_LOG_ID,
@@ -714,7 +727,23 @@ mod tests {
             false,
         );
         assert_eq!(
-            classify_worker_local_confirmation(&wrong_body, CHAT_ID, SOURCE_LOG_ID, "reply"),
+            classify_worker_local_confirmation(&other_self_row, CHAT_ID, SOURCE_LOG_ID, "reply"),
+            LocalConfirmationObservation::Pending
+        );
+
+        let duplicate = page(
+            vec![
+                message(REPLY_LOG_ID, true, "reply"),
+                message(REPLY_LOG_ID + 1, true, "reply"),
+            ],
+            "complete",
+            REPLY_LOG_ID + 1,
+            2,
+            false,
+            false,
+        );
+        assert_eq!(
+            classify_worker_local_confirmation(&duplicate, CHAT_ID, SOURCE_LOG_ID, "reply"),
             LocalConfirmationObservation::Rejected
         );
 
