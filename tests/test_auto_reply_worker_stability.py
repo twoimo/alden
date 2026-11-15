@@ -7,6 +7,7 @@ import tempfile
 import time
 import unittest
 import urllib.parse
+from datetime import datetime
 from pathlib import Path
 from unittest import mock
 
@@ -228,6 +229,51 @@ class LaughterSelectionTests(unittest.TestCase):
             self.assertRegex(run, r"\Aㅋ{3,}\Z")
             lengths.add(len(run))
         self.assertGreater(len(lengths), 1, "every draft kept exactly three ㅋ")
+
+
+def geeknews_feed(*ids: int) -> str:
+    entries = "".join(
+        f"<entry><title><![CDATA[글 {topic}]]></title>"
+        f"<link rel='alternate' href='https://news.hada.io/topic?id={topic}' /></entry>"
+        for topic in ids
+    )
+    return f"<feed>{entries}</feed>"
+
+
+class GeekNewsCursorTests(unittest.TestCase):
+    def setUp(self):
+        self.worker = load_worker("auto_reply_geeknews_cursor_test")
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.state_root = Path(temporary.name)
+        self.room = self.state_root / "rooms" / "325472527151234"
+        self.room.mkdir(parents=True, mode=0o700)
+        self.worker.QUEUE = self.room / "reply-queue.sqlite3"
+        self.cursor_path = self.room / "geeknews-rss-cursor.json"
+
+    def slot_time(self, name: str) -> float:
+        for slot, hour, minute, jitter in self.worker.GEEKNEWS_DAILY_SLOTS:
+            if slot == name:
+                start, _end = self.worker._geeknews_slot_window(
+                    datetime(2026, 8, 16).date(), slot, hour, minute, jitter
+                )
+                return start + 60
+        raise AssertionError(name)
+
+    @unittest.expectedFailure
+    def test_selecting_a_digest_never_writes_the_cursor(self):
+        now = self.slot_time("morning")
+        first = self.worker._next_geeknews_digest(
+            fetcher=lambda: geeknews_feed(10, 11, 12), now=now
+        )
+        self.assertFalse(
+            self.cursor_path.exists(), "selection persisted seen ids before any send"
+        )
+        second = self.worker._next_geeknews_digest(
+            fetcher=lambda: geeknews_feed(10, 11, 12), now=now
+        )
+        self.assertEqual(first["ids"], [10, 11, 12])
+        self.assertEqual(second["ids"], [10, 11, 12])
 
 
 if __name__ == "__main__":
