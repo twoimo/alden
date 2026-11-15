@@ -448,7 +448,6 @@ class GeekNewsOperatorTests(unittest.TestCase):
 
 
 class PortabilityTests(unittest.TestCase):
-    @unittest.expectedFailure
     def test_worker_hard_codes_no_account_home_directory(self):
         source = WORKER.read_text(encoding="utf-8")
         self.assertEqual(re.findall(r"/Users/[^/\s\"']+/\S*", source), [])

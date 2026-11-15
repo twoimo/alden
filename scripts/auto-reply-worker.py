@@ -12133,7 +12133,7 @@ def generate_reply(
     env.update(
         {
             "HOME": str(Path.home()),
-            "PATH": "/Users/twoimo/.bun/bin:/usr/bin:/bin:/opt/homebrew/bin",
+            "PATH": f"{Path.home() / '.bun' / 'bin'}:/usr/bin:/bin:/opt/homebrew/bin",
             "TMPDIR": "/tmp",
         }
     )
