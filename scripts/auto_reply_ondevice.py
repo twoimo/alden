@@ -299,12 +299,9 @@ class ModelResidencyManager:
         self.cancel_check = cancel_check
         self._condition = threading.Condition()
         self._in_flight = 0
-        self._cancelled = False
         self._swap_in_progress = False
 
     def _is_cancelled(self) -> bool:
-        if self._cancelled:
-            return True
         if self.cancel_check is None:
             return False
         try:

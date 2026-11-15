@@ -612,7 +612,7 @@ INDEX_TOPIC_MIN_MESSAGES = 20
 # 방에서 누구와 나눈 이야기인지는 몰랐다. 답변에 필요한 것은 주제만이
 # 아니라 그 주제가 누구의 어떤 맥락이었는가다. 방과 사람을 따로 세우고
 # 주제와 이어 두면, 같은 "주식"이라도 성린이형 방의 주식과 부자멘토멘티의
-# 주식이 다른 자리로 남는다.
+# 주식이 다른 자리로 남는다 (사용자 지시).
 INDEX_CHAT_MIN_MESSAGES = 40
 INDEX_PERSON_MIN_MESSAGES = 25
 # 한 방에서 이 사람의 메시지가 이 비율을 넘으면 그 방의 중심 인물로 본다.
@@ -1227,6 +1227,7 @@ def index_person_entities(
 
     사람 뉴런은 방 뉴런에 매인다. 같은 이름이 여러 방에 있어도 방마다 다른
     뉴런이 되어, "성린이형 방의 성린이"와 다른 방의 동명이인이 섞이지 않는다
+    (사용자 지시).
     """
     stats = {"persons": 0, "written": 0, "with_lines": 0}
     index_path = _index_db_path(state_root)
@@ -1535,7 +1536,7 @@ def index_membership_relations(
     - 사람 → 주제 (TALKS_ABOUT): 이 사람이 이 주제를 자주 꺼낸다
 
     세 번째가 답변에 가장 쓸모 있다. 같은 "주식"이라도 누가 꺼낸
-    이야기인지에 따라 답이 달라지기 때문이다.
+    이야기인지에 따라 답이 달라지기 때문이다 (사용자 지시).
     """
     stats = {"person_chat": 0, "chat_topic": 0, "person_topic": 0}
     index_path = _index_db_path(state_root)
@@ -1666,7 +1667,7 @@ def prune_indexed_entities(
     색인에서 빠진 대화가 그래프에 그대로 남았다. 그래서 같은 방을 가리키는
     두 뉴런("커리어톡"과 "커리어톡 (커리어톡)")이 나란히 서고, 지워진 주제도
     계속 그려졌다. 색인으로 만든 뉴런 중 이번 주기에 다시 쓰이지 않은 것을
-    지우고, 그 뉴런에 매달린 시냅스도 함께 지운다.
+    지우고, 그 뉴런에 매달린 시냅스도 함께 지운다 (사용자 지시).
 
     손으로 적은 기본 뉴런(ent:*)과 원장에서 온 근거는 건드리지 않는다.
 
@@ -1910,7 +1911,7 @@ def _start_background_reindex(
 
     # 메뉴바는 이 모듈을 짧게 사는 프로세스로 부른다. 데몬 스레드는 그
     # 프로세스가 끝나면 함께 죽어 재색인이 반쯤 돌다 만 채로 남는다. 그래서
-    # 기본값(mode="process")은 스스로 살아남는 자식 프로세스다.
+    # 기본값(mode="process")은 스스로 살아남는 자식 프로세스다 (사용자 지시).
     # 테스트는 "thread", 일회성 내보내기는 "inline" 으로 돈다.
     thread = threading.Thread(target=_run, name="kg-reindex", daemon=True)
     thread.start()
@@ -2053,6 +2054,7 @@ def _reindex_all(
     A step that dies is recorded in kg_meta instead of being swallowed. The
     menu showed a freshly indexed, empty graph while every indexer had been
     failing on a NameError that only the real database path reached
+    (사용자 지시).
     """
     failures: list[str] = []
 
