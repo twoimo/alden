@@ -187,7 +187,6 @@ pub struct DeletionReport {
 #[derive(Debug)]
 pub struct TempScope {
     dir: Option<tempfile::TempDir>,
-    deleted: bool,
 }
 
 impl TempScope {
@@ -195,7 +194,6 @@ impl TempScope {
     pub fn new() -> std::io::Result<Self> {
         Ok(Self {
             dir: Some(tempfile::TempDir::new()?),
-            deleted: false,
         })
     }
 
@@ -203,11 +201,6 @@ impl TempScope {
     /// scope has been deleted.
     pub fn path(&self) -> Option<&std::path::Path> {
         self.dir.as_ref().map(|d| d.path())
-    }
-
-    /// Whether the working data has been deleted.
-    pub fn is_deleted(&self) -> bool {
-        self.deleted
     }
 
     /// Delete the working data and report whether it finished within five
@@ -225,15 +218,10 @@ impl TempScope {
 
     /// Delete the working directory if it still exists. Idempotent.
     fn delete_now(&mut self) -> bool {
-        if self.deleted {
-            return true;
-        }
-        let ok = match self.dir.take() {
+        match self.dir.take() {
             Some(dir) => dir.close().is_ok(),
             None => true,
-        };
-        self.deleted = true;
-        ok
+        }
     }
 }
 
@@ -338,11 +326,6 @@ impl<'a> AsideCollector<'a> {
             secrets,
             clock,
         }
-    }
-
-    /// The loopback endpoint this collector uses (always loopback, R11.5).
-    pub fn endpoint(&self) -> &LoopbackEndpoint {
-        &self.endpoint
     }
 }
 
@@ -575,12 +558,8 @@ impl RoutingCollector<'_> {
                 reason: SwitchReason::NotInstalled,
                 aside_error: err,
             },
-            Err(err @ CollectError::HealthTimeout) => AsideAttempt::Switch {
-                reason: SwitchReason::HealthTimeout,
-                aside_error: err,
-            },
-            // Any other health failure also falls back, reported as a health
-            // timeout-class switch.
+            // A health timeout, or any other health failure, falls back as a
+            // health timeout-class switch.
             Err(err) => AsideAttempt::Switch {
                 reason: SwitchReason::HealthTimeout,
                 aside_error: err,

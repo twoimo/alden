@@ -1456,7 +1456,7 @@ impl<'a> SelfImprover<'a> {
         holdout_len: usize,
         baseline_recent20: &[u8],
     ) -> Result<PromotionOutcome, ImproveError> {
-        let (room_pid, kind) = problem.clone();
+        let (room_pid, kind) = problem;
 
         // 홀드아웃 부족은 평가·승격 없이 현재 구성 유지, 시도로 세지 않음 (R8.18).
         if holdout_len < MIN_HOLDOUT_FOR_EVAL {
@@ -1556,7 +1556,7 @@ impl<'a> SelfImprover<'a> {
         // 승격 직전 세대로 되돌린다 (R8.19).
         self.store
             .record_rolled_back(&watch.promoted_digest, self.clock.now_ms())?;
-        let outcome = self.apply_generation(watch.prior_generation, "rolled_back")?;
+        let outcome = self.apply_generation(watch.prior_generation)?;
 
         // 롤백으로 끝난 시도는 1회로 센다 (R8.14).
         if let Some((room_pid, kind)) = &watch.problem {
@@ -1574,18 +1574,14 @@ impl<'a> SelfImprover<'a> {
     /// 보관된 승격 이전 구성 하나를 골라 되돌린다 (R8.13). 사용자 명시 동작이며
     /// 안전설정을 바꾸지 않는다.
     pub fn rollback_to(&mut self, gen: KnobGeneration) -> Result<KnobGeneration, ImproveError> {
-        let applied = self.apply_generation(gen, "rolled_back")?;
+        let applied = self.apply_generation(gen)?;
         // 수동 되돌리기는 감시 상태를 해제한다.
         self.watch = None;
         Ok(applied)
     }
 
-    /// 세대 `gen`의 구성을 실사용 기본으로 적용하고 이력을 남긴다.
-    fn apply_generation(
-        &self,
-        gen: KnobGeneration,
-        verdict: &str,
-    ) -> Result<KnobGeneration, ImproveError> {
+    /// 세대 `gen`의 구성을 실사용 기본으로 되돌려 적용하고 이력을 남긴다.
+    fn apply_generation(&self, gen: KnobGeneration) -> Result<KnobGeneration, ImproveError> {
         // 먼저 KnobStore의 인메모리 세대에서 찾고, 없으면 지속 저장소에서 찾는다.
         let knobs = self
             .knobs
@@ -1607,7 +1603,7 @@ impl<'a> SelfImprover<'a> {
             at: self.clock.now_ms(),
             problem_kind: String::new(),
             changed_keys: String::new(),
-            verdict: verdict.to_string(),
+            verdict: "rolled_back".to_string(),
             generation: Some(new_gen),
         })?;
         Ok(new_gen)

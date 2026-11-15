@@ -1278,7 +1278,6 @@ impl LinkForwarder<'_> {
                     &link_key,
                     &message,
                     source_images,
-                    dropped_images,
                     &acquire_misses,
                     start,
                 )
@@ -1298,14 +1297,12 @@ impl LinkForwarder<'_> {
 
     /// Deliver one built message to one room, applying the once-per-room and
     /// image-parity rules (R6.5, R6.6, R6.7, R6.10, R6.14).
-    #[allow(clippy::too_many_arguments)]
     fn deliver_to_room(
         &self,
         room: &ResolvedRoom,
         link_key: &str,
         message: &ForwardMessage,
         source_images: usize,
-        dropped_images: usize,
         acquire_misses: &[String],
         start: i64,
     ) -> RoomDelivery {
@@ -1392,7 +1389,7 @@ impl LinkForwarder<'_> {
                             miss_reasons: miss_reasons(
                                 source_images,
                                 images_delivered,
-                                dropped_images,
+                                message.dropped_images,
                                 acquire_misses,
                             ),
                             images,

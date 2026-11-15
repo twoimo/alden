@@ -1284,25 +1284,25 @@ pub fn download_media_file_into_existing_directory(
     url: &str,
     path: &Path,
 ) -> Result<u64> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| anyhow::anyhow!("Media output has no parent directory"))?;
-    if !parent.is_dir() {
-        anyhow::bail!("Media output directory does not exist");
-    }
+    ensure_existing_parent_directory(path)?;
     download_media_file_without_directory_creation(Some(creds), url, path)
 }
 
 /// Download a signed Kakao CDN URL into an already validated directory
 /// without attaching account credentials or creating ancestors.
 pub fn download_public_media_file_into_existing_directory(url: &str, path: &Path) -> Result<u64> {
+    ensure_existing_parent_directory(path)?;
+    download_media_file_without_directory_creation(None, url, path)
+}
+
+fn ensure_existing_parent_directory(path: &Path) -> Result<()> {
     let parent = path
         .parent()
         .ok_or_else(|| anyhow::anyhow!("Media output has no parent directory"))?;
     if !parent.is_dir() {
         anyhow::bail!("Media output directory does not exist");
     }
-    download_media_file_without_directory_creation(None, url, path)
+    Ok(())
 }
 #[cfg(test)]
 mod tests {

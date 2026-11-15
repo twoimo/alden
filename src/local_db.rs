@@ -89,23 +89,6 @@ fn collect_json_titles(value: &serde_json::Value, depth: usize, titles: &mut Vec
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
-fn json_title_from_value(value: &serde_json::Value, depth: usize) -> Option<String> {
-    let mut titles = Vec::new();
-    collect_json_titles(value, depth, &mut titles);
-    preferred_group_title(&titles)
-}
-
-#[cfg_attr(not(test), allow(dead_code))]
-fn title_from_extra(extra: &str) -> Option<String> {
-    let trimmed = extra.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    let value: serde_json::Value = serde_json::from_str(trimmed).ok()?;
-    json_title_from_value(&value, 0)
-}
-
 fn plist_i64_values(value: &plist::Value) -> Vec<i64> {
     match value {
         plist::Value::Integer(number) => number
@@ -2645,10 +2628,6 @@ mod tests {
     fn group_title_uses_extra_json_when_chat_name_is_empty() {
         assert_eq!(
             resolve_group_title("", "", "", "{\"name\":\"부자멘토멘티\"}", &[]),
-            Some("부자멘토멘티".to_string()),
-        );
-        assert_eq!(
-            title_from_extra("{\"name\":\"부자멘토멘티\"}"),
             Some("부자멘토멘티".to_string()),
         );
     }

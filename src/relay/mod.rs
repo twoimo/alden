@@ -57,16 +57,9 @@ pub const MAX_TEXT_CHARS: usize = 4_000;
 pub const MAX_LINKS: usize = 20;
 /// The maximum images relayed from one message (R7.2).
 pub const MAX_IMAGES: usize = 10;
-/// The per-image-acquisition-step time bound, in milliseconds (R7.5). Matches
-/// [`crate::forward::STEP_TIMEOUT_MS`].
-pub const STEP_TIMEOUT_MS: u64 = 2_000;
 /// How many consecutive image-count mismatches settle a message as a final miss
 /// (R7.18).
 pub const MISMATCH_STREAK_LIMIT: u8 = 3;
-
-/// The window within which missing images are retried before the streak forces
-/// a final miss (R7.8).
-pub const MISS_RETRY_WINDOW_SECS: i64 = 30;
 /// How long the relay waits to confirm the AX notification subscription before
 /// switching to polling, in milliseconds (R7.13).
 pub const NOTIFICATION_CONFIRM_MS: i64 = 5_000;
@@ -509,13 +502,6 @@ impl Settlement {
     fn advances_cursor(&self) -> bool {
         matches!(self, Settlement::Committed(_) | Settlement::MissFinal(_))
     }
-
-    /// The image tally this settlement carries.
-    pub fn tally(&self) -> ImageTally {
-        match self {
-            Settlement::Committed(t) | Settlement::MissRetrying(t) | Settlement::MissFinal(t) => *t,
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -682,11 +668,6 @@ impl<'a> TelegramRelay<'a> {
     /// The current cursor (mainly for inspection and tests).
     pub fn cursor(&self) -> &RelayCursor {
         &self.cursor
-    }
-
-    /// A snapshot of the latency window (R7.11).
-    pub fn latency(&self) -> LatencySnapshot {
-        self.latency.snapshot()
     }
 
     /// One detection cycle (R7.9).
