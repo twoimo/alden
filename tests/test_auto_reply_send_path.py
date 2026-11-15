@@ -1902,6 +1902,24 @@ class GenerationFallbackTests(SendPathCase):
                     self.circuit(), {PRIMARY: ("open", failure, 1, COOLING, False)}
                 )
 
+    def test_spent_generation_budget_calls_no_model(self):
+        for kind in RUNNER_KINDS:
+            for cooled in (False, True):
+                with self.runner_kind(kind), self.subTest(cooled=cooled), mock.patch.object(
+                    self.module, "MODEL_GENERATION_BUDGET_SECONDS", 0.0
+                ):
+                    if cooled:
+                        self.cool_down_primary()
+
+                    result, _log = self.generate()
+
+                    self.assertEqual(self.model_calls, [])
+                    self.assertEqual(
+                        result["model_failure_class"],
+                        "rate_limit" if cooled else "runner_timeout",
+                    )
+                    self.assertEqual(set(self.circuit()), {PRIMARY})
+
     def test_turn_held_after_the_model_answered_releases_the_lease(self):
         for kind in RUNNER_KINDS:
             with self.runner_kind(kind):
