@@ -23,33 +23,13 @@ MAX_LAUNCHES_PER_WINDOW = 3
 LAUNCH_COOLDOWN_NS = 60 * 1_000_000_000
 OPEN_TIMEOUT_SECONDS = 5.0
 # Keep the new watchdog launch out of the foreground without hiding an already
-# open Terminal application or its existing windows.
+# open Terminal application or its existing windows. Never pass `-j`: open(1)
+# spells it `-j, --hide`, and it hides a Terminal that is already running.
 BACKGROUND_OPEN_ARGV = (
     "/usr/bin/open",
     "-g",
-    "-j",
     "-b",
     "com.apple.Terminal",
-)
-BACKGROUND_DEMOTE_WATCHDOG_ARGV = (
-    "/usr/bin/osascript",
-    "-e",
-    (
-        'tell application "Terminal"\n'
-        "repeat with w in (get windows)\n"
-        "try\n"
-        "set wn to name of w as text\n"
-        'if wn contains "start-auto-reply-session.command" then\n'
-        "if (busy of w) is false then\n"
-        "close w saving no\n"
-        "else\n"
-        "set miniaturized of w to true\n"
-        "end if\n"
-        "end if\n"
-        "end try\n"
-        "end repeat\n"
-        "end tell"
-    ),
 )
 
 
@@ -365,25 +345,6 @@ def run_once(
             else:
                 returncode = int(result.returncode)
                 reason = "" if returncode == 0 else "open_failed"
-                # Miniaturize only the watchdog .command window. Never hide
-                # the user's existing interactive Terminal process.
-                if returncode == 0:
-                    try:
-                        runner(
-                            list(BACKGROUND_DEMOTE_WATCHDOG_ARGV),
-                            stdin=subprocess.DEVNULL,
-                            stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE,
-                            env={
-                                "HOME": str(Path.home()),
-                                "PATH": "/usr/bin:/bin",
-                                "TMPDIR": "/tmp",
-                            },
-                            timeout=OPEN_TIMEOUT_SECONDS,
-                            check=False,
-                        )
-                    except (OSError, subprocess.TimeoutExpired, TypeError):
-                        pass
         _atomic_status(
             status_path,
             _status(

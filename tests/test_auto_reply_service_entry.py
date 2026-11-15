@@ -111,6 +111,75 @@ def load_entry(name):
     return module
 
 
+# A group leader whose child stays in the leader's process group, ignores
+# SIGTERM, and records its PID. argv: <pid file> <"wait" | "exit">.
+STUBBORN_GROUP_LEADER = """\
+import os
+import subprocess
+import sys
+import time
+
+pid_file, mode = sys.argv[1], sys.argv[2]
+subprocess.Popen([
+    sys.executable,
+    "-I",
+    "-c",
+    "import os, signal, sys, time\\n"
+    "signal.signal(signal.SIGTERM, signal.SIG_IGN)\\n"
+    "open(sys.argv[1] + '.tmp', 'w').write(str(os.getpid()))\\n"
+    "os.replace(sys.argv[1] + '.tmp', sys.argv[1])\\n"
+    "time.sleep(30)\\n",
+    pid_file,
+])
+deadline = time.monotonic() + 5
+while not os.path.exists(pid_file) and time.monotonic() < deadline:
+    time.sleep(0.01)
+if mode == "exit":
+    raise SystemExit(7)
+time.sleep(30)
+"""
+
+
+def _start_stubborn_group(pid_file: Path, mode: str) -> subprocess.Popen:
+    return subprocess.Popen(
+        [str(_test_python()), "-I", "-c", STUBBORN_GROUP_LEADER, str(pid_file), mode],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+
+
+def _read_member_pid(pid_file: Path, timeout: float = 5.0) -> int:
+    deadline = time.monotonic() + timeout
+    while not pid_file.exists():
+        if time.monotonic() >= deadline:
+            raise AssertionError("group member never recorded its PID")
+        time.sleep(0.01)
+    return int(pid_file.read_text(encoding="utf-8"))
+
+
+def _process_gone(pid: int, timeout: float = 3.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        time.sleep(0.02)
+    return False
+
+
+def _kill_stray_member(pid: int | None, process_group: int) -> None:
+    if pid is None:
+        return
+    try:
+        if os.getpgid(pid) == process_group:
+            os.kill(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+
+
 class CatalogSelectorTests(unittest.TestCase):
     def test_named_catalog_room_binds_its_title(self):
         module = load_entry("auto_reply_catalog_selector_test")
@@ -232,6 +301,56 @@ class CatalogSelectorTests(unittest.TestCase):
         self.assertEqual(artifact["selectors"], candidates)
         self.assertIn("whole set rejected attempt 1", artifact["reason"])
         self.assertIn("whole set rejected attempt 2", artifact["reason"])
+
+    def test_failed_aggregate_artifact_write_keeps_the_previous_artifact(self):
+        # RLIMIT_FSIZE turns any write past 64 bytes into EFBIG, which is how
+        # a full disk interrupts the artifact write halfway through.
+        child = """\
+import importlib.util
+import resource
+import sys
+from pathlib import Path
+from unittest import mock
+
+entry, state_root = sys.argv[1], Path(sys.argv[2])
+spec = importlib.util.spec_from_file_location("service_artifact_child", entry)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+resource.setrlimit(resource.RLIMIT_FSIZE, (64, 64))
+with mock.patch.object(
+    module, "_catalog_selectors", return_value=["id:1", "id:2", "id:3"]
+), mock.patch.object(
+    module, "_preflight_cli", return_value=(False, {}, "rejected " * 40)
+):
+    try:
+        module._perform_preflight(
+            Path("/tmp/python"),
+            Path("/tmp/entry.py"),
+            Path("/tmp/openkakao-cli"),
+            Path("/tmp/config.toml"),
+            None,
+            state_root,
+            invalidate=False,
+        )
+    except SystemExit as exc:
+        print("preflight fenced:", str(exc)[:16])
+"""
+        previous = json.dumps({"scope": "aggregate", "selectors": [], "reason": "old"})
+        with tempfile.TemporaryDirectory() as raw:
+            state_root = Path(raw)
+            artifact = state_root / "preflight-skipped.json"
+            artifact.write_text(previous, encoding="utf-8")
+            result = subprocess.run(
+                [sys.executable, "-I", "-B", "-c", child, str(ENTRY), str(state_root)],
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("preflight fenced:", result.stdout)
+            self.assertEqual(artifact.read_text(encoding="utf-8"), previous)
 
     def test_catalog_preflight_requires_full_set_capable_first_call(self):
         module = load_entry("auto_reply_catalog_full_set_only_test")
@@ -1784,6 +1903,69 @@ raise SystemExit(73)
             killpg.call_args_list,
             [mock.call(child.pid, signal.SIGTERM), mock.call(child.pid, signal.SIGKILL)],
         )
+
+    def test_owned_child_termination_sweeps_members_that_outlive_the_leader(self):
+        module = load_entry("auto_reply_terminate_sweep_test")
+        with tempfile.TemporaryDirectory() as temporary:
+            pid_file = Path(temporary) / "member.pid"
+            leader = _start_stubborn_group(pid_file, "wait")
+            member = None
+            try:
+                member = _read_member_pid(pid_file)
+                module._terminate_owned_child(leader, grace_seconds=0.5)
+                self.assertIsNotNone(leader.poll())
+                self.assertTrue(
+                    _process_gone(member),
+                    "a TERM-ignoring group member outlived its leader's termination",
+                )
+            finally:
+                _kill_stray_member(member, leader.pid)
+                if leader.poll() is None:
+                    os.killpg(leader.pid, signal.SIGKILL)
+                leader.wait(timeout=5)
+
+    def test_session_guardian_sweeps_members_left_by_an_exited_leader(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = self._fixture(Path(temporary))
+            module = fixture["module"]
+            read_fd, write_fd = module._create_session_guardian_control(
+                fixture["binary"], fixture["config"], "bind:42:room"
+            )
+            pid_file = Path(temporary) / "member.pid"
+            leaders = []
+
+            def fake_popen(_argv, **_kwargs):
+                leaders.append(_start_stubborn_group(pid_file, "exit"))
+                return leaders[-1]
+
+            def quiet_select(_readers, _writers, _errors, _timeout):
+                time.sleep(0.02)
+                return [], [], []
+
+            member = None
+            try:
+                with mock.patch.object(module.os, "getpid", return_value=6100), mock.patch.object(
+                    module.os, "getpgrp", return_value=6100
+                ), mock.patch.object(module.os, "getsid", return_value=6100), mock.patch.object(
+                    module, "SESSION_GUARDIAN_TERMINATE_GRACE_SECONDS", 0.5
+                ):
+                    result = module.run_session_guardian(
+                        read_fd,
+                        popen_factory=fake_popen,
+                        select_fn=quiet_select,
+                        install_signal_handlers=False,
+                    )
+                member = _read_member_pid(pid_file)
+                self.assertEqual(result, 7)
+                self.assertTrue(
+                    _process_gone(member),
+                    "the guardian returned while its exited leader's group still had a member",
+                )
+            finally:
+                os.close(write_fd)
+                for leader in leaders:
+                    _kill_stray_member(member, leader.pid)
+                    leader.wait(timeout=5)
 
     def test_runtime_asset_drift_during_check_fails_without_receipt(self):
         with tempfile.TemporaryDirectory() as temporary:

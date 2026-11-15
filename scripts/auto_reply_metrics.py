@@ -49,7 +49,7 @@ def _number(value: object, *, integer: bool = False) -> int | float | None:
         return None
     try:
         number = float(value)
-    except BaseException:
+    except Exception:
         return None
     if not math.isfinite(number) or number < 0:
         return None
@@ -94,7 +94,7 @@ def coarse_error_class(error: BaseException | object) -> str:
             return "runtime"
         if "subprocess" in name:
             return "subprocess"
-    except BaseException:
+    except Exception:
         pass
     return "unknown"
 
@@ -120,7 +120,7 @@ class Measurement:
         try:
             if enabled():
                 self._started = time.monotonic()
-        except BaseException:
+        except Exception:
             self._started = None
         return self
 
@@ -147,7 +147,7 @@ class Measurement:
                     lateness_ms=self.lateness_ms,
                     error_class=self.error_class,
                 )
-        except BaseException:
+        except Exception:
             pass
         return False
 
@@ -232,7 +232,7 @@ def record(
         else:
             sys.stderr.write(line)
             sys.stderr.flush()
-    except BaseException:
+    except Exception:
         return False
     return True
 
@@ -274,7 +274,7 @@ def timed(stage: str) -> Callable[[Callable[..., T]], Callable[..., T]]:
                             )
                     elif isinstance(result, bool) and not result:
                         sample.outcome = "unavailable"
-                except BaseException:
+                except Exception:
                     pass
                 return result
         return wrapped
@@ -287,5 +287,5 @@ def byte_length(value: object) -> int:
         return 0
     try:
         return min(len(value.encode("utf-8", "ignore")), _MAX_TOTAL)
-    except BaseException:
+    except Exception:
         return 0
