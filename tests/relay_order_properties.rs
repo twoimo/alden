@@ -27,7 +27,7 @@ use openkakao_cli::fakes::{BlockingRealSendPort, FakeAxReadPort, ForbiddenNetwor
 use openkakao_cli::forward::{ImageLadder, StepAttempt, STEP_TIMEOUT_MS};
 use openkakao_cli::logging::{FlowKind, HistoryStore, SqliteHistoryStore};
 use openkakao_cli::ports::{
-    AcquireError, DetectMode, ExcludedAttachment, ImageAcquisition, ImageAcquirer, ImageBlob,
+    AcquireError, DetectMode, ExcludedAttachment, ImageAcquirer, ImageAcquisition, ImageBlob,
     ImageRef, LinkRef, NetworkPort, SendPort, TelegramMessage,
 };
 use openkakao_cli::relay::{
@@ -436,7 +436,7 @@ proptest! {
             }
             // Cursor advanced; the message is recorded as delivered.
             prop_assert_eq!(relay.cursor().last_at, 1);
-            prop_assert!(store.is_delivered(10, &pid_hash));
+            prop_assert!(store.is_delivered(10, &pid_hash).unwrap());
         } else {
             // Ticks 1..=(LIMIT-1): retrying, cursor pinned, missing count
             // explicit, never marked delivered (R7.8).
@@ -454,7 +454,7 @@ proptest! {
                     other => prop_assert!(false, "expected retrying, got {other:?}"),
                 }
                 prop_assert_eq!(relay.cursor().last_at, 0, "cursor advanced during retry");
-                prop_assert!(!store.is_delivered(10, &pid_hash));
+                prop_assert!(!store.is_delivered(10, &pid_hash).unwrap());
             }
             // The MISMATCH_STREAK_LIMIT-th consecutive mismatch settles final.
             let tick = relay.tick();
@@ -469,7 +469,7 @@ proptest! {
             // Cursor advances on the final miss, but delivery is never recorded,
             // so the message stays retryable in principle (R7.18).
             prop_assert_eq!(relay.cursor().last_at, 1);
-            prop_assert!(!store.is_delivered(10, &pid_hash));
+            prop_assert!(!store.is_delivered(10, &pid_hash).unwrap());
         }
 
         // Relay events stay redacted.

@@ -222,7 +222,7 @@ pub struct LatencySnapshot {
 }
 
 /// A failure from the relay ledger or cursor store.
-#[derive(Debug, Error)]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum LedgerError {
     #[error("중계 기록 저장소 오류: {0}")]
     Backend(String),
@@ -237,17 +237,18 @@ fn db_err(e: rusqlite::Error) -> LedgerError {
 /// after three consecutive mismatches (R7.18).
 ///
 /// Keys are the provenance-hashed message id, so no raw Telegram identifier is
-/// persisted (R7.16).
+/// persisted (R7.16). Every method reports a store failure as an error, never as
+/// "not delivered", so the relay can hold instead of sending twice.
 pub trait RelayLedger {
     /// Whether `message_pid` has been confirmed as delivered to `chat_id`.
-    fn is_delivered(&self, chat_id: i64, message_pid: &str) -> bool;
+    fn is_delivered(&self, chat_id: i64, message_pid: &str) -> Result<bool, LedgerError>;
 
     /// Record a confirmed delivery. Only a fully-delivered (message, room) is
     /// ever marked, so an image mismatch stays retryable (R7.8, R7.10).
     fn mark(&self, chat_id: i64, message_pid: &str, at: i64) -> Result<(), LedgerError>;
 
     /// The current consecutive image-mismatch streak for a (message, room).
-    fn mismatch_streak(&self, chat_id: i64, message_pid: &str) -> u8;
+    fn mismatch_streak(&self, chat_id: i64, message_pid: &str) -> Result<u8, LedgerError>;
 
     /// Increment and return the mismatch streak for a (message, room), capped at
     /// [`MISMATCH_STREAK_LIMIT`] (R7.18).
@@ -315,7 +316,7 @@ pub fn ensure_relay_schema(conn: &Connection) -> Result<(), LedgerError> {
 }
 
 impl RelayLedger for SqliteRelayStore {
-    fn is_delivered(&self, chat_id: i64, message_pid: &str) -> bool {
+    fn is_delivered(&self, chat_id: i64, message_pid: &str) -> Result<bool, LedgerError> {
         self.conn
             .query_row(
                 "SELECT 1 FROM relay_ledger
@@ -323,7 +324,9 @@ impl RelayLedger for SqliteRelayStore {
                 params![chat_id, message_pid],
                 |_| Ok(()),
             )
-            .is_ok()
+            .optional()
+            .map(|row| row.is_some())
+            .map_err(db_err)
     }
 
     fn mark(&self, chat_id: i64, message_pid: &str, at: i64) -> Result<(), LedgerError> {
@@ -340,7 +343,7 @@ impl RelayLedger for SqliteRelayStore {
         Ok(())
     }
 
-    fn mismatch_streak(&self, chat_id: i64, message_pid: &str) -> u8 {
+    fn mismatch_streak(&self, chat_id: i64, message_pid: &str) -> Result<u8, LedgerError> {
         let streak: Option<i64> = self
             .conn
             .query_row(
@@ -350,9 +353,8 @@ impl RelayLedger for SqliteRelayStore {
                 |row| row.get(0),
             )
             .optional()
-            .ok()
-            .flatten();
-        streak.unwrap_or(0).clamp(0, MISMATCH_STREAK_LIMIT as i64) as u8
+            .map_err(db_err)?;
+        Ok(streak.unwrap_or(0).clamp(0, MISMATCH_STREAK_LIMIT as i64) as u8)
     }
 
     fn bump_mismatch(&self, chat_id: i64, message_pid: &str) -> Result<u8, LedgerError> {
@@ -368,7 +370,7 @@ impl RelayLedger for SqliteRelayStore {
                 params![chat_id, message_pid, 0_i64],
             )
             .map_err(db_err)?;
-        Ok(self.mismatch_streak(chat_id, message_pid))
+        self.mismatch_streak(chat_id, message_pid)
     }
 }
 
@@ -556,6 +558,10 @@ pub struct RelayTick {
     /// Set when the Telegram window or Accessibility permission was unavailable
     /// this tick; the cursor is left untouched (R7.14).
     pub ax_unavailable: bool,
+    /// Set once the ledger or cursor store has failed. The relay then holds:
+    /// it keeps the cursor and sends nothing more, on this tick and every
+    /// later one, because it can no longer tell what each room already has.
+    pub store_error: Option<LedgerError>,
 }
 
 /// The Telegram → KakaoTalk relay for one pair (R7).
@@ -573,6 +579,9 @@ pub struct TelegramRelay<'a> {
     latency: LatencyWindow,
     notification_started: i64,
     notification_confirmed: bool,
+    /// The first store failure. Once set, the relay holds for good (see
+    /// [`RelayTick::store_error`]).
+    store_fault: Option<LedgerError>,
 }
 
 impl<'a> TelegramRelay<'a> {
@@ -589,11 +598,11 @@ impl<'a> TelegramRelay<'a> {
         pair: RelayPair,
         screen_recording_granted: bool,
     ) -> Self {
-        let cursor = cursor_store
-            .load(&pair.pair_key())
-            .ok()
-            .flatten()
-            .unwrap_or_default();
+        // An unreadable cursor must not restart the stream from the beginning.
+        let (cursor, store_fault) = match cursor_store.load(&pair.pair_key()) {
+            Ok(cursor) => (cursor.unwrap_or_default(), None),
+            Err(e) => (RelayCursor::default(), Some(e)),
+        };
         let now = clock.now_ms();
         Self {
             ax,
@@ -609,6 +618,7 @@ impl<'a> TelegramRelay<'a> {
             latency: LatencyWindow::new(),
             notification_started: now,
             notification_confirmed: false,
+            store_fault,
         }
     }
 
@@ -631,6 +641,9 @@ impl<'a> TelegramRelay<'a> {
         // A generous safety cap; the loop normally ends when the stream drains
         // or a message needs retrying.
         for _ in 0..(LATENCY_WINDOW_MAX * 16 + 16) {
+            if self.store_fault.is_some() {
+                break;
+            }
             let port_cursor = self.cursor.as_port_cursor();
             let message = match self.ax.messages_after(&port_cursor, 1) {
                 Ok(batch) => batch.into_iter().next(),
@@ -655,17 +668,27 @@ impl<'a> TelegramRelay<'a> {
             // Reading a message confirms the notification subscription (R7.13).
             self.notification_confirmed = true;
 
-            let outcome = self.process_message(&message);
+            let outcome = match self.process_message(&message) {
+                Ok(outcome) => outcome,
+                Err(e) => {
+                    self.hold(e);
+                    break;
+                }
+            };
             let advance = outcome.settlement.advances_cursor();
             processed.push(outcome);
 
             if advance {
-                self.cursor = RelayCursor {
+                let next = RelayCursor {
                     last_at: message.at,
                     last_display_order: message.display_order,
                     last_message_pid: crate::context::provenance_id(&message.pid),
                 };
-                let _ = self.cursor_store.save(&self.pair.pair_key(), &self.cursor);
+                if let Err(e) = self.cursor_store.save(&self.pair.pair_key(), &next) {
+                    self.hold(e);
+                    break;
+                }
+                self.cursor = next;
             } else {
                 // MissRetrying: leave the cursor pinned and end the tick so the
                 // same head message is retried next tick (R7.8, R7.9).
@@ -679,12 +702,29 @@ impl<'a> TelegramRelay<'a> {
             latency: self.latency.snapshot(),
             cursor: self.cursor.clone(),
             ax_unavailable,
+            store_error: self.store_fault.clone(),
         }
+    }
+
+    /// Latch the first store failure and journal it; the relay sends nothing
+    /// more (see [`RelayTick::store_error`]).
+    fn hold(&mut self, error: LedgerError) {
+        self.journal_stage(
+            &self.pair.pair_key(),
+            Stage::Commit,
+            StageStatus::Failed,
+            "relay_store_failed",
+            self.clock.now_ms(),
+        );
+        self.store_fault.get_or_insert(error);
     }
 
     /// Relay one message to every target room, applying the once-per-room,
     /// image-parity, and mismatch-streak rules (R7.7, R7.8, R7.10, R7.18).
-    fn process_message(&mut self, message: &crate::ports::TelegramMessage) -> MessageOutcome {
+    fn process_message(
+        &mut self,
+        message: &crate::ports::TelegramMessage,
+    ) -> Result<MessageOutcome, LedgerError> {
         let start = self.clock.now_ms();
         let pid_hash = crate::context::provenance_id(&message.pid);
 
@@ -714,14 +754,14 @@ impl<'a> TelegramRelay<'a> {
         for &room in &self.pair.kakao_rooms {
             // Dedup: an already-delivered (message, room) is never re-sent
             // (R7.10). It counts as delivered for this message.
-            if self.ledger.is_delivered(room, &pid_hash) {
+            if self.ledger.is_delivered(room, &pid_hash)? {
                 continue;
             }
 
             if nothing_to_send {
                 // Only excluded attachments — nothing relayable; settle the room
                 // so the message can advance (R7.19).
-                let _ = self.ledger.mark(room, &pid_hash, self.clock.now_ms());
+                self.ledger.mark(room, &pid_hash, self.clock.now_ms())?;
                 continue;
             }
 
@@ -731,13 +771,10 @@ impl<'a> TelegramRelay<'a> {
                     delivered_min = delivered_min.min(images_delivered);
                     let complete = images_delivered == source_images && dropped_images == 0;
                     if complete {
-                        let _ = self.ledger.mark(room, &pid_hash, self.clock.now_ms());
+                        self.ledger.mark(room, &pid_hash, self.clock.now_ms())?;
                     } else {
                         all_delivered = false;
-                        let streak = self
-                            .ledger
-                            .bump_mismatch(room, &pid_hash)
-                            .unwrap_or(MISMATCH_STREAK_LIMIT);
+                        let streak = self.ledger.bump_mismatch(room, &pid_hash)?;
                         if streak < MISMATCH_STREAK_LIMIT {
                             retrying = true;
                         }
@@ -793,13 +830,13 @@ impl<'a> TelegramRelay<'a> {
 
         self.journal_stage(&pid_hash, Stage::Commit, status, code, start);
 
-        MessageOutcome {
+        Ok(MessageOutcome {
             message_pid: pid_hash,
             settlement,
             excluded,
             unresolved_links,
             dropped_images,
-        }
+        })
     }
 
     /// Resolve the detection mode: prefer AX notifications, and switch to ≤ 2s
@@ -1076,16 +1113,16 @@ mod tests {
     #[test]
     fn ledger_mark_and_is_delivered() {
         let store = SqliteRelayStore::open_in_memory().unwrap();
-        assert!(!store.is_delivered(1, "pid-a"));
+        assert!(!store.is_delivered(1, "pid-a").unwrap());
         store.mark(1, "pid-a", 100).unwrap();
-        assert!(store.is_delivered(1, "pid-a"));
-        assert!(!store.is_delivered(2, "pid-a"));
+        assert!(store.is_delivered(1, "pid-a").unwrap());
+        assert!(!store.is_delivered(2, "pid-a").unwrap());
     }
 
     #[test]
     fn ledger_bump_mismatch_caps_at_three() {
         let store = SqliteRelayStore::open_in_memory().unwrap();
-        assert_eq!(store.mismatch_streak(1, "pid"), 0);
+        assert_eq!(store.mismatch_streak(1, "pid").unwrap(), 0);
         assert_eq!(store.bump_mismatch(1, "pid").unwrap(), 1);
         assert_eq!(store.bump_mismatch(1, "pid").unwrap(), 2);
         assert_eq!(store.bump_mismatch(1, "pid").unwrap(), 3);
@@ -1139,7 +1176,7 @@ mod tests {
         assert_eq!(sender.send_count(), 1);
         assert_eq!(relay.cursor().last_at, 1);
         let pid_hash = crate::context::provenance_id("m1");
-        assert!(store.is_delivered(10, &pid_hash));
+        assert!(store.is_delivered(10, &pid_hash).unwrap());
     }
 
     #[test]
@@ -1225,7 +1262,9 @@ mod tests {
             Settlement::MissFinal(_)
         ));
         assert_eq!(relay.cursor().last_at, 1);
-        assert!(!store.is_delivered(10, &crate::context::provenance_id("m1")));
+        assert!(!store
+            .is_delivered(10, &crate::context::provenance_id("m1"))
+            .unwrap());
     }
 
     #[test]
@@ -1273,7 +1312,9 @@ mod tests {
         ));
         // Fenced never marks delivered, and the cursor still advances so the
         // queue is not blocked (R7.15).
-        assert!(!store.is_delivered(10, &crate::context::provenance_id("m1")));
+        assert!(!store
+            .is_delivered(10, &crate::context::provenance_id("m1"))
+            .unwrap());
         assert_eq!(relay.cursor().last_at, 1);
     }
 
@@ -1386,6 +1427,73 @@ mod tests {
             assert!(!ev.trace_id.contains("secret-pid"));
             assert!(!ev.result_code.contains("sensitive"));
         }
+    }
+
+    /// A store on disk that a second connection then breaks with `fault_sql`,
+    /// so the relay sees a real SQLite error.
+    fn faulty_store(fault_sql: &str) -> (tempfile::TempDir, SqliteRelayStore) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("relay.db");
+        let store = SqliteRelayStore::open(&path).unwrap();
+        Connection::open(&path)
+            .unwrap()
+            .execute_batch(fault_sql)
+            .unwrap();
+        (dir, store)
+    }
+
+    #[test]
+    fn unreadable_ledger_holds_without_sending() {
+        let (_dir, store) = faulty_store("DROP TABLE relay_ledger;");
+        let clock = VirtualClock::new(0);
+        let ax = FakeAxReadPort::new(vec![msg("m1", 1, 0, "a")]);
+        let rig = LadderRig::acquiring(clock.clone());
+        let ladder = rig.ladder_acquiring();
+        let sender = ScriptedSender::new(RelaySendOutcome::Sent {
+            images_delivered: 0,
+        });
+        let journal = SqliteHistoryStore::open_in_memory().unwrap();
+        let mut relay = build(&ax, &ladder, &sender, &store, &journal, &clock, pair(&[10]));
+
+        let tick = relay.tick();
+        assert_eq!(
+            sender.send_count(),
+            0,
+            "a ledger read error must not read as not-delivered"
+        );
+        assert!(tick.store_error.is_some());
+        assert_eq!(relay.cursor().last_at, 0);
+    }
+
+    #[test]
+    fn unwritable_ledger_stops_the_relay_after_one_send() {
+        let (_dir, store) = faulty_store(
+            "CREATE TRIGGER refuse BEFORE INSERT ON relay_ledger
+             BEGIN SELECT RAISE(ABORT, 'disk full'); END;",
+        );
+        let clock = VirtualClock::new(0);
+        let ax = FakeAxReadPort::new(vec![msg("m1", 1, 0, "a"), msg("m2", 2, 0, "b")]);
+        let rig = LadderRig::acquiring(clock.clone());
+        let ladder = rig.ladder_acquiring();
+        let sender = ScriptedSender::new(RelaySendOutcome::Sent {
+            images_delivered: 0,
+        });
+        let journal = SqliteHistoryStore::open_in_memory().unwrap();
+        let mut relay = build(&ax, &ladder, &sender, &store, &journal, &clock, pair(&[10]));
+
+        let first = relay.tick();
+        let second = relay.tick();
+        assert_eq!(
+            sender.send_count(),
+            1,
+            "an unrecorded delivery must not be followed by more sends"
+        );
+        assert!(first.store_error.is_some() && second.store_error.is_some());
+        assert!(!first
+            .processed
+            .iter()
+            .any(|o| matches!(o.settlement, Settlement::Committed(_))));
+        assert_eq!(relay.cursor().last_at, 0);
     }
 
     #[test]
