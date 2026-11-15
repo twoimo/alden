@@ -34,7 +34,8 @@ OPENKAKAO_TAURI_SOURCE_CHECK=1 cargo test --manifest-path desktop/src-tauri/Carg
 - The CI Python list is in `.github/workflows/ci.yml`. A new Python test module only runs
   in CI after you add it there.
 - Run Python tests with `HOME` pointed at an empty temp dir. `tests/auto_reply_hermetic.py`
-  guards `tests.test_auto_reply_cli_runtime`; other modules have no such guard yet.
+  guards `tests.test_auto_reply_cli_runtime` and `tests.test_auto_reply_turn_holds`. Other
+  modules have no such guard yet.
 - `tests.test_auto_reply_menubar` needs the baked frozen `.pyc`, so it fails on a fresh
   checkout. That failure does not mean your change broke it.
 - A Python change reaches production only after a new runtime is baked and installed.

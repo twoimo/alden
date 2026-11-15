@@ -8,10 +8,22 @@ import unittest
 from contextlib import redirect_stderr
 from unittest import mock
 
+from tests import auto_reply_hermetic as hermetic
 from tests import test_auto_reply_cli_runtime as runtime_helpers
 
 
+def setUpModule():
+    hermetic.install_guards()
+
+
+def tearDownModule():
+    hermetic.uninstall_guards()
+
+
 class AutoReplyTurnHoldTests(unittest.TestCase):
+    def setUp(self):
+        hermetic.begin_test(self)
+
     _load_auto_reply_module = staticmethod(
         runtime_helpers.AutoReplyCliRuntimeTests._load_auto_reply_module
     )
