@@ -113,6 +113,33 @@ pub(crate) fn leftover_queue_has_unknown_send(
                         "AutoReply leftover queue for {expected_chat_id} has unknown or in-flight sends"
                     );
                 }
+            } else if connection.query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('reply_jobs')
+                 WHERE name = 'ax_mutation_authorized'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )? != 0
+            {
+                // The job row records whether Return may have been pressed;
+                // the capped journal may already have dropped the job's rows.
+                let authorized_unknown: i64 = connection.query_row(
+                    "SELECT COUNT(*) FROM reply_jobs j
+                     WHERE j.status = 'delivery_unknown'
+                       AND j.ax_mutation_authorized = 1
+                       AND NOT EXISTS (
+                          SELECT 1 FROM pipeline_transitions confirmed
+                          WHERE confirmed.event_id = j.event_id
+                            AND confirmed.component = 'ax'
+                            AND confirmed.code = 'local_db_confirmed'
+                       )",
+                    [],
+                    |row| row.get(0),
+                )?;
+                if authorized_unknown != 0 {
+                    anyhow::bail!(
+                        "AutoReply leftover queue for {expected_chat_id} has unknown or in-flight sends"
+                    );
+                }
             } else {
                 let ax_unknown: i64 = connection.query_row(
                     "SELECT COUNT(*) FROM reply_jobs j

@@ -843,7 +843,7 @@ def _queue_expected_chat_id() -> int | None:
 
 
 def _queue_connection() -> sqlite3.Connection:
-    """Connect to the supervisor-created exact v2 queue without migrating it."""
+    """Connect to the supervisor-created exact queue without migrating it."""
     _verify_private_queue_parent()
     expected_chat_id = _queue_expected_chat_id()
     connection = transition_journal.connect_existing_queue(
@@ -2873,31 +2873,17 @@ PRE_SEND_MODEL_RETRY_REASONS = frozenset(
 def leftover_unknown_has_ax_mutation(
     connection: sqlite3.Connection, event_id: str
 ) -> bool:
-    try:
-        row = connection.execute(
-            """
-            SELECT COUNT(*) FROM sqlite_master
-            WHERE type = 'table' AND name = 'pipeline_transitions'
-            """
-        ).fetchone()
-    except sqlite3.Error:
-        return True
-    if row is None or int(row[0] or 0) == 0:
-        return True
-    count = connection.execute(
-        """
-        SELECT COUNT(*) FROM pipeline_transitions
-        WHERE event_id = ?
-          AND (
-            (component = 'ax' AND code IN ('ax_mutation_authorized', 'local_db_confirmed'))
-            OR (component = 'pre_send' AND to_state IN ('ready', 'sending'))
-            OR from_state = 'sending'
-            OR to_state = 'sending'
-          )
-        """,
+    """Whether Return may have been pressed for this job.
+
+    Read from the job row, never the transition journal: the journal cap
+    deletes a job's rows once newer rows fill it, and their absence proves
+    nothing.
+    """
+    row = connection.execute(
+        "SELECT ax_mutation_authorized FROM reply_jobs WHERE event_id = ?",
         (event_id,),
     ).fetchone()
-    return int(count[0] or 0) > 0
+    return row is None or bool(row[0])
 
 
 def _rebind_formed_reply_to_live_owner(row: sqlite3.Row) -> str | None:
@@ -3125,11 +3111,11 @@ def leftover_pre_send_unknown_skip_fields(
                     "error_class": None,
                 }
         if ax_mutated:
-            # `ax_mutation_authorized` is only journalled when the job moves to
-            # `sending`, so the send may already have happened and the exact
-            # match just scrolled past the bounded local-read window. A missing
-            # match is not proof of non-delivery: keep delivery_unknown instead
-            # of rescheduling and risking a duplicate send (2026-09-13).
+            # The job was committed to `sending`, so the send may already have
+            # happened and the exact match just scrolled past the bounded
+            # local-read window. A missing match is not proof of non-delivery:
+            # keep delivery_unknown instead of rescheduling and risking a
+            # duplicate send (2026-09-13).
             return None
         if _row_event_is_proactive(row) and not _proactive_unix_leftover_job(row):
             delay = row["scheduled_delay_seconds"] or MIN_REPLY_DELAY_SECONDS
@@ -3367,16 +3353,7 @@ def _queue_reconciliation_blockers(connection: sqlite3.Connection) -> int:
                 reply IS NOT NULL
                 AND length(reply) > 0
                 AND COALESCE(json_extract(event_json, '$.proactive'), 0) != 1
-                AND NOT EXISTS (
-                  SELECT 1 FROM pipeline_transitions t
-                  WHERE t.event_id = reply_jobs.event_id
-                    AND (
-                      (t.component = 'ax' AND t.code IN ('ax_mutation_authorized', 'local_db_confirmed'))
-                      OR (t.component = 'pre_send' AND t.to_state IN ('ready', 'sending'))
-                      OR t.from_state = 'sending'
-                      OR t.to_state = 'sending'
-                    )
-                )
+                AND ax_mutation_authorized = 0
               )
               OR EXISTS (
                 SELECT 1 FROM pipeline_transitions t
