@@ -50,7 +50,26 @@ class TransitionJournalTests(unittest.TestCase):
             finally:
                 connection.close()
 
-    def test_empty_and_exact_legacy_migrate_atomically_to_exact_v2(self):
+    @staticmethod
+    def journal_v2(connection: sqlite3.Connection) -> None:
+        """Lay out the exact v2 queue that predates the send authority column."""
+        for statement in (
+            journal.CREATE_REPLY_JOBS_V2_SQL,
+            journal.CREATE_REPLY_STATUS_INDEX_SQL,
+            journal.CREATE_TOMBSTONES_SQL,
+            journal.CREATE_SUPERSESSIONS_SQL,
+            journal.CREATE_MODEL_CIRCUIT_SQL,
+            journal.CREATE_JOURNAL_SQL,
+            journal.CREATE_JOURNAL_INDEX_SQL,
+            journal.CREATE_INSERT_TRIGGER_V2_SQL,
+            journal.CREATE_UPDATE_TRIGGER_V2_SQL,
+            journal.CREATE_CAP_TRIGGER_SQL,
+        ):
+            connection.execute(statement)
+        connection.execute(f"PRAGMA user_version = {journal.JOURNAL_QUEUE_USER_VERSION}")
+        connection.commit()
+
+    def test_empty_and_exact_legacy_migrate_atomically_to_exact_v3(self):
         for legacy in (False, True):
             with self.subTest(legacy=legacy), tempfile.TemporaryDirectory() as temporary:
                 root = self.private_root(temporary)
@@ -63,9 +82,9 @@ class TransitionJournalTests(unittest.TestCase):
                 connection = journal.open_queue(path, create=True)
                 try:
                     self.assertEqual(
-                        connection.execute("PRAGMA user_version").fetchone()[0], 2
+                        connection.execute("PRAGMA user_version").fetchone()[0], 3
                     )
-                    self.assertEqual(journal.validate_queue_schema(connection), 2)
+                    self.assertEqual(journal.validate_queue_schema(connection), 3)
                     journal.validate_queue_contents(connection)
                     journal.append_transition(
                         connection,
@@ -128,6 +147,171 @@ class TransitionJournalTests(unittest.TestCase):
             )
             connection.close()
             self.assertFalse(Path(f"{path}-journal").exists())
+
+    def v2_queue_with_jobs(self, room: Path, jobs: dict) -> Path:
+        """An exact v2 queue whose journal keeps only the rows each job lists."""
+        path = room / "reply-queue.sqlite3"
+        connection = sqlite3.connect(path)
+        self.journal_v2(connection)
+        for event_id, (status, _rows, _marked) in jobs.items():
+            log_id = int(event_id.rsplit(":", 1)[1])
+            connection.execute(
+                "INSERT INTO reply_jobs(event_id,event_json,status,reply,"
+                "created_at,updated_at,attempt_no) VALUES(?,?,?,?,1.0,1.0,2)",
+                (event_id, f'{{"chat_id":42,"log_id":{log_id}}}', status, "내일 봐요"),
+            )
+        connection.execute("DELETE FROM pipeline_transitions")
+        for event_id, (_status, rows, _marked) in jobs.items():
+            for component, from_state, to_state, code in rows:
+                connection.execute(
+                    "INSERT INTO pipeline_transitions(schema_version,event_id,"
+                    "attempt_no,component,from_state,to_state,code,source_epoch,"
+                    "occurred_at_ns) VALUES(1,?,2,?,?,?,?,NULL,1)",
+                    (event_id, component, from_state, to_state, code),
+                )
+        connection.commit()
+        connection.close()
+        path.chmod(0o600)
+        return path
+
+    @staticmethod
+    def snapshot(path: Path) -> tuple[list[tuple], list[tuple]]:
+        connection = sqlite3.connect(path)
+        try:
+            jobs = connection.execute(
+                "SELECT event_id,event_json,status,due_at,decision,reason,category,"
+                "reply,scheduled_delay_seconds,error_class,created_at,updated_at,"
+                "attempt_no FROM reply_jobs ORDER BY event_id"
+            ).fetchall()
+            rows = connection.execute(
+                "SELECT * FROM pipeline_transitions ORDER BY seq"
+            ).fetchall()
+            return jobs, rows
+        finally:
+            connection.close()
+
+    def test_v2_queue_migrates_once_and_keeps_every_possible_send_marked(self):
+        sent_row = ("ax", "ready", "sending", "ax_mutation_authorized")
+        # status, the journal rows the cap left for the job, whether it is marked
+        jobs = {
+            # Return may have fired and the cap already deleted the evidence.
+            "db:42:1": ("delivery_unknown", [], True),
+            "db:42:2": ("sending", [], True),
+            "db:42:3": ("scheduled", [sent_row], True),
+            "db:42:4": ("scheduled", [("pre_send", "processing", "ready", "pre_send_check")], True),
+            "db:42:5": ("sent", [("ax", "sending", "sending", "local_db_confirmed")], True),
+            "db:42:6": ("reconcile_required", [], True),
+            "db:42:7": ("pending", [], False),
+            "db:42:8": ("skipped", [("queue", "processing", "skipped", "status_changed")], False),
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            room = self.private_root(temporary) / "42"
+            room.mkdir(mode=0o700)
+            path = self.v2_queue_with_jobs(room, jobs)
+            before = self.snapshot(path)
+
+            with self.assertRaises(sqlite3.DatabaseError):
+                journal.connect_existing_queue(path, expected_chat_id=42)
+            self.assertEqual(self.snapshot(path), before)
+
+            for _ in range(2):
+                connection = journal.open_queue(path, create=True, expected_chat_id=42)
+                try:
+                    self.assertEqual(
+                        connection.execute("PRAGMA user_version").fetchone()[0], 3
+                    )
+                    marked = dict(
+                        connection.execute(
+                            "SELECT event_id, ax_mutation_authorized FROM reply_jobs"
+                        ).fetchall()
+                    )
+                finally:
+                    connection.close()
+                self.assertEqual(
+                    marked,
+                    {event_id: int(job[2]) for event_id, job in jobs.items()},
+                )
+                self.assertEqual(self.snapshot(path), before)
+            journal.connect_existing_queue(path, expected_chat_id=42).close()
+
+    def test_v2_migration_fault_rolls_back_to_the_exact_v2_queue(self):
+        jobs = {"db:42:1": ("delivery_unknown", [], True)}
+        with tempfile.TemporaryDirectory() as temporary:
+            room = self.private_root(temporary) / "42"
+            room.mkdir(mode=0o700)
+            path = self.v2_queue_with_jobs(room, jobs)
+            before = self.snapshot(path)
+            connection = sqlite3.connect(path)
+            with (
+                mock.patch.object(
+                    journal,
+                    "validate_queue_schema",
+                    side_effect=sqlite3.OperationalError("injected migration fault"),
+                ),
+                self.assertRaises(sqlite3.OperationalError),
+            ):
+                journal.initialize_queue_schema(connection, expected_chat_id=42)
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 2)
+            journal._validate_schema_sql(connection, version=2)
+            connection.close()
+            self.assertEqual(self.snapshot(path), before)
+
+    def test_sending_marks_the_job_and_no_later_status_clears_it(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = self.private_root(temporary)
+            connection = journal.open_queue(root / "queue.sqlite3", create=True)
+            try:
+                connection.execute(
+                    "INSERT INTO reply_jobs(event_id,event_json,status,created_at,"
+                    "updated_at) VALUES('db:42:7','{}','pending',1.0,1.0)"
+                )
+                seen = []
+                for status in (
+                    "processing", "scheduled", "processing", "sending", "processing",
+                    "scheduled", "processing", "sending", "delivery_unknown",
+                    "scheduled", "sent",
+                ):
+                    connection.execute(
+                        "UPDATE reply_jobs SET status=? WHERE event_id='db:42:7'",
+                        (status,),
+                    )
+                    seen.append(
+                        connection.execute(
+                            "SELECT ax_mutation_authorized FROM reply_jobs"
+                        ).fetchone()[0]
+                    )
+                connection.execute(
+                    "INSERT INTO reply_jobs(event_id,event_json,status,created_at,"
+                    "updated_at) VALUES('db:42:8','{}','sending',1.0,1.0)"
+                )
+                connection.commit()
+                self.assertEqual(seen, [0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1])
+                self.assertEqual(
+                    connection.execute(
+                        "SELECT ax_mutation_authorized FROM reply_jobs "
+                        "WHERE event_id='db:42:8'"
+                    ).fetchone()[0],
+                    1,
+                )
+            finally:
+                connection.close()
+
+    def test_tampered_send_authority_fails_closed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = self.private_root(temporary)
+            path = root / "queue.sqlite3"
+            connection = journal.open_queue(path, create=True)
+            connection.execute(
+                "INSERT INTO reply_jobs(event_id,event_json,status,created_at,"
+                "updated_at) VALUES('db:1:1','{}','delivery_unknown',1.0,1.0)"
+            )
+            connection.commit()
+            connection.execute("PRAGMA ignore_check_constraints = ON")
+            connection.execute("UPDATE reply_jobs SET ax_mutation_authorized = 2")
+            connection.commit()
+            with self.assertRaisesRegex(sqlite3.DatabaseError, "send authority invalid"):
+                journal.validate_queue_contents(connection)
+            connection.close()
 
     def test_tampered_trigger_or_literal_case_fails_closed(self):
         self.assertNotEqual(

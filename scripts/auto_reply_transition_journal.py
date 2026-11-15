@@ -18,7 +18,9 @@ from pathlib import Path
 from typing import Final
 
 
-QUEUE_USER_VERSION: Final = 2
+QUEUE_USER_VERSION: Final = 3
+# The journal layout before reply_jobs carried its own send authority.
+JOURNAL_QUEUE_USER_VERSION: Final = 2
 JOURNAL_SCHEMA_VERSION: Final = 1
 JOURNAL_MAX_ROWS: Final = 4096
 QUEUE_FILE_MODE: Final = 0o600
@@ -137,6 +139,31 @@ CREATE TABLE reply_jobs(
     attempt_no INTEGER NOT NULL DEFAULT 0 CHECK(attempt_no BETWEEN 0 AND 1000000)
 )
 """
+# 1 once the job was committed to `sending`, after which Return may have been
+# pressed. The job row owns this fact because pipeline_transitions is a rolling
+# window: the cap trigger drops a job's rows once newer rows fill it.
+SEND_AUTHORITY_COLUMN_SQL: Final = (
+    "ax_mutation_authorized INTEGER NOT NULL DEFAULT 0 "
+    "CHECK(ax_mutation_authorized IN (0, 1))"
+)
+CREATE_REPLY_JOBS_V3_SQL: Final = f"""
+CREATE TABLE reply_jobs(
+    event_id TEXT PRIMARY KEY,
+    event_json TEXT NOT NULL,
+    status TEXT NOT NULL,
+    due_at REAL,
+    decision TEXT,
+    reason TEXT,
+    category TEXT,
+    reply TEXT,
+    scheduled_delay_seconds REAL,
+    error_class TEXT,
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL,
+    attempt_no INTEGER NOT NULL DEFAULT 0 CHECK(attempt_no BETWEEN 0 AND 1000000),
+    {SEND_AUTHORITY_COLUMN_SQL}
+)
+"""
 CREATE_REPLY_STATUS_INDEX_SQL: Final = (
     "CREATE INDEX idx_reply_jobs_status_due ON reply_jobs(status, due_at)"
 )
@@ -203,6 +230,9 @@ REPLY_JOBS_V2_COLUMNS: Final = (
     (10, "created_at", "REAL", 1, None, 0),
     (11, "updated_at", "REAL", 1, None, 0),
     (12, "attempt_no", "INTEGER", 1, "0", 0),
+)
+REPLY_JOBS_V3_COLUMNS: Final = REPLY_JOBS_V2_COLUMNS + (
+    (13, "ax_mutation_authorized", "INTEGER", 1, "0", 0),
 )
 
 _COMPONENT_SQL = ",".join(f"'{value}'" for value in sorted(JOURNAL_COMPONENTS))
@@ -279,7 +309,7 @@ def _source_epoch_sql(prefix: str) -> str:
     )
 
 
-CREATE_INSERT_TRIGGER_SQL: Final = f"""
+CREATE_INSERT_TRIGGER_V2_SQL: Final = f"""
 CREATE TRIGGER {TRIGGER_INSERT}
 AFTER INSERT ON reply_jobs
 BEGIN
@@ -292,6 +322,42 @@ BEGIN
   );
 END
 """
+CREATE_INSERT_TRIGGER_SQL: Final = f"""
+CREATE TRIGGER {TRIGGER_INSERT}
+AFTER INSERT ON reply_jobs
+BEGIN
+  UPDATE reply_jobs
+  SET ax_mutation_authorized = 1
+  WHERE event_id = NEW.event_id AND NEW.status = 'sending';
+  INSERT INTO pipeline_transitions(
+    schema_version,event_id,attempt_no,component,from_state,to_state,
+    code,source_epoch,occurred_at_ns
+  ) VALUES(
+    {JOURNAL_SCHEMA_VERSION},NEW.event_id,NEW.attempt_no,'queue','none',NEW.status,
+    'enqueued',{_source_epoch_sql('NEW')},{_trigger_timestamp_sql()}
+  );
+END
+"""
+CREATE_UPDATE_TRIGGER_V2_SQL: Final = f"""
+CREATE TRIGGER {TRIGGER_UPDATE}
+AFTER UPDATE OF status ON reply_jobs
+WHEN OLD.status IS NOT NEW.status
+BEGIN
+  UPDATE reply_jobs
+  SET attempt_no = OLD.attempt_no + 1
+  WHERE event_id = NEW.event_id AND NEW.status = 'processing';
+  INSERT INTO pipeline_transitions(
+    schema_version,event_id,attempt_no,component,from_state,to_state,
+    code,source_epoch,occurred_at_ns
+  ) VALUES(
+    {JOURNAL_SCHEMA_VERSION},NEW.event_id,
+    CASE WHEN NEW.status = 'processing' THEN OLD.attempt_no + 1
+      ELSE NEW.attempt_no END,
+    'queue',OLD.status,NEW.status,'status_changed',
+    {_source_epoch_sql('NEW')},{_trigger_timestamp_sql()}
+  );
+END
+"""
 CREATE_UPDATE_TRIGGER_SQL: Final = f"""
 CREATE TRIGGER {TRIGGER_UPDATE}
 AFTER UPDATE OF status ON reply_jobs
@@ -300,6 +366,9 @@ BEGIN
   UPDATE reply_jobs
   SET attempt_no = OLD.attempt_no + 1
   WHERE event_id = NEW.event_id AND NEW.status = 'processing';
+  UPDATE reply_jobs
+  SET ax_mutation_authorized = 1
+  WHERE event_id = NEW.event_id AND NEW.status = 'sending';
   INSERT INTO pipeline_transitions(
     schema_version,event_id,attempt_no,component,from_state,to_state,
     code,source_epoch,occurred_at_ns
@@ -375,21 +444,45 @@ def _expected_legacy_sql(*, include_model: bool) -> dict[tuple[str, str], str]:
     return expected
 
 
-def _expected_v2_sql(*, include_model: bool) -> dict[tuple[str, str], str]:
+def _expected_journal_sql(
+    *,
+    include_model: bool,
+    reply_jobs_sql: str,
+    insert_trigger_sql: str,
+    update_trigger_sql: str,
+) -> dict[tuple[str, str], str]:
     expected = _expected_legacy_sql(include_model=include_model)
-    expected[("table", "reply_jobs")] = _normalize_sql(CREATE_REPLY_JOBS_V2_SQL)
+    expected[("table", "reply_jobs")] = _normalize_sql(reply_jobs_sql)
     expected.update(
         {
             ("table", "pipeline_transitions"): _normalize_sql(CREATE_JOURNAL_SQL),
             ("index", "idx_pipeline_transitions_event_seq"): _normalize_sql(
                 CREATE_JOURNAL_INDEX_SQL
             ),
-            ("trigger", TRIGGER_INSERT): _normalize_sql(CREATE_INSERT_TRIGGER_SQL),
-            ("trigger", TRIGGER_UPDATE): _normalize_sql(CREATE_UPDATE_TRIGGER_SQL),
+            ("trigger", TRIGGER_INSERT): _normalize_sql(insert_trigger_sql),
+            ("trigger", TRIGGER_UPDATE): _normalize_sql(update_trigger_sql),
             ("trigger", TRIGGER_CAP): _normalize_sql(CREATE_CAP_TRIGGER_SQL),
         }
     )
     return expected
+
+
+def _expected_v2_sql(*, include_model: bool) -> dict[tuple[str, str], str]:
+    return _expected_journal_sql(
+        include_model=include_model,
+        reply_jobs_sql=CREATE_REPLY_JOBS_V2_SQL,
+        insert_trigger_sql=CREATE_INSERT_TRIGGER_V2_SQL,
+        update_trigger_sql=CREATE_UPDATE_TRIGGER_V2_SQL,
+    )
+
+
+def _expected_v3_sql(*, include_model: bool) -> dict[tuple[str, str], str]:
+    return _expected_journal_sql(
+        include_model=include_model,
+        reply_jobs_sql=CREATE_REPLY_JOBS_V3_SQL,
+        insert_trigger_sql=CREATE_INSERT_TRIGGER_SQL,
+        update_trigger_sql=CREATE_UPDATE_TRIGGER_SQL,
+    )
 
 
 def _table_info(
@@ -401,18 +494,23 @@ def _table_info(
     )
 
 
-def _validate_schema_sql(connection: sqlite3.Connection, *, v2: bool) -> None:
+def _validate_schema_sql(connection: sqlite3.Connection, *, version: int) -> None:
     actual = _schema_sql(connection)
     include_model = ("table", "model_circuit_breaker") in actual
-    expected = (
-        _expected_v2_sql(include_model=include_model)
-        if v2
-        else _expected_legacy_sql(include_model=include_model)
-    )
+    if version == 0:
+        expected, job_columns = _expected_legacy_sql(include_model=include_model), None
+    elif version == JOURNAL_QUEUE_USER_VERSION:
+        expected = _expected_v2_sql(include_model=include_model)
+        job_columns = REPLY_JOBS_V2_COLUMNS
+    elif version == QUEUE_USER_VERSION:
+        expected = _expected_v3_sql(include_model=include_model)
+        job_columns = REPLY_JOBS_V3_COLUMNS
+    else:
+        raise sqlite3.DatabaseError("unsupported reply queue schema version")
     if actual != expected:
         raise sqlite3.DatabaseError("reply queue schema SQL mismatch")
-    if v2:
-        if _table_info(connection, "reply_jobs") != REPLY_JOBS_V2_COLUMNS:
+    if job_columns is not None:
+        if _table_info(connection, "reply_jobs") != job_columns:
             raise sqlite3.DatabaseError("reply queue job columns mismatch")
         if _table_info(connection, "pipeline_transitions") != JOURNAL_COLUMNS:
             raise sqlite3.DatabaseError("reply queue journal columns mismatch")
@@ -427,11 +525,11 @@ def validate_queue_schema(
         raise sqlite3.DatabaseError("reply queue user_version unavailable")
     version = int(version_row[0])
     if version == 0 and allow_legacy:
-        _validate_schema_sql(connection, v2=False)
+        _validate_schema_sql(connection, version=0)
         return version
     if version != QUEUE_USER_VERSION:
         raise sqlite3.DatabaseError("reply queue user_version mismatch")
-    _validate_schema_sql(connection, v2=True)
+    _validate_schema_sql(connection, version=QUEUE_USER_VERSION)
     return version
 
 
@@ -583,6 +681,19 @@ def _validate_queue_contents_body(
         or int(invalid_attempts[0]) != 0
     ):
         raise sqlite3.DatabaseError("reply queue attempt metadata invalid")
+    invalid_authority = connection.execute(
+        """
+        SELECT COUNT(*) FROM reply_jobs
+        WHERE typeof(ax_mutation_authorized) != 'integer'
+           OR ax_mutation_authorized NOT IN (0, 1)
+        """
+    ).fetchone()
+    if (
+        invalid_authority is None
+        or isinstance(invalid_authority[0], bool)
+        or int(invalid_authority[0]) != 0
+    ):
+        raise sqlite3.DatabaseError("reply queue send authority invalid")
     expected_chat_id = _connection_expected_chat_id(connection, expected_chat_id)
     if expected_chat_id is not None:
         validate_queue_room_binding(connection, expected_chat_id)
@@ -661,10 +772,41 @@ def _upgrade_reply_jobs_to_v2(connection: sqlite3.Connection) -> None:
     connection.execute(CREATE_REPLY_STATUS_INDEX_SQL)
 
 
+def _add_send_authority(connection: sqlite3.Connection) -> None:
+    """Give every v2 job its send authority, then let both triggers keep it.
+
+    A v2 job's only record of a send attempt was its journal rows, and the cap
+    may already have deleted them. So a job is marked when its status still
+    leaves a send possible, as well as when its journal still shows an attempt.
+    """
+    connection.execute(f"ALTER TABLE reply_jobs ADD COLUMN {SEND_AUTHORITY_COLUMN_SQL}")
+    connection.execute(
+        """
+        UPDATE reply_jobs SET ax_mutation_authorized = 1
+        WHERE status IN ('sending', 'delivery_unknown', 'reconcile_required', 'poison')
+           OR EXISTS (
+             SELECT 1 FROM pipeline_transitions t
+             WHERE t.event_id = reply_jobs.event_id
+               AND (
+                 (t.component = 'ax'
+                  AND t.code IN ('ax_mutation_authorized', 'local_db_confirmed'))
+                 OR (t.component = 'pre_send' AND t.to_state IN ('ready', 'sending'))
+                 OR t.from_state = 'sending'
+                 OR t.to_state = 'sending'
+               )
+           )
+        """
+    )
+    for trigger in (TRIGGER_INSERT, TRIGGER_UPDATE):
+        connection.execute(f"DROP TRIGGER {trigger}")
+    connection.execute(CREATE_INSERT_TRIGGER_SQL)
+    connection.execute(CREATE_UPDATE_TRIGGER_SQL)
+
+
 def initialize_queue_schema(
     connection: sqlite3.Connection, *, expected_chat_id: int | None = None
 ) -> None:
-    """Create/migrate an empty or exact legacy v0 queue atomically to v2."""
+    """Create or migrate an empty, exact v0, or exact v2 queue atomically to v3."""
     if connection.in_transaction:
         raise sqlite3.ProgrammingError("queue migration requires transaction boundary")
     expected_chat_id = _connection_expected_chat_id(connection, expected_chat_id)
@@ -673,26 +815,30 @@ def initialize_queue_schema(
         validate_queue_schema(connection)
         validate_queue_contents(connection, expected_chat_id=expected_chat_id)
         return
-    if version != 0:
+    if version not in {0, JOURNAL_QUEUE_USER_VERSION}:
         raise sqlite3.DatabaseError("unsupported reply queue schema version")
     connection.execute("BEGIN IMMEDIATE")
     try:
-        if not _schema_sql(connection):
-            _create_legacy_schema(connection)
-        validate_queue_schema(connection, allow_legacy=True)
-        _validate_quick_check(connection)
-        if expected_chat_id is not None:
-            # Legacy work identities must be attested before copying them into
-            # the v2 authority. The journal table does not exist yet.
-            validate_queue_room_binding(
-                connection, expected_chat_id, include_journal=False
-            )
-        _upgrade_reply_jobs_to_v2(connection)
-        connection.execute(CREATE_JOURNAL_SQL)
-        connection.execute(CREATE_JOURNAL_INDEX_SQL)
-        connection.execute(CREATE_INSERT_TRIGGER_SQL)
-        connection.execute(CREATE_UPDATE_TRIGGER_SQL)
-        connection.execute(CREATE_CAP_TRIGGER_SQL)
+        if version == 0:
+            if not _schema_sql(connection):
+                _create_legacy_schema(connection)
+            validate_queue_schema(connection, allow_legacy=True)
+            _validate_quick_check(connection)
+            if expected_chat_id is not None:
+                # Legacy work identities must be attested before copying them
+                # into the v2 authority. The journal table does not exist yet.
+                validate_queue_room_binding(
+                    connection, expected_chat_id, include_journal=False
+                )
+            _upgrade_reply_jobs_to_v2(connection)
+            connection.execute(CREATE_JOURNAL_SQL)
+            connection.execute(CREATE_JOURNAL_INDEX_SQL)
+            connection.execute(CREATE_INSERT_TRIGGER_V2_SQL)
+            connection.execute(CREATE_UPDATE_TRIGGER_V2_SQL)
+            connection.execute(CREATE_CAP_TRIGGER_SQL)
+        else:
+            _validate_schema_sql(connection, version=JOURNAL_QUEUE_USER_VERSION)
+        _add_send_authority(connection)
         connection.execute(f"PRAGMA user_version = {QUEUE_USER_VERSION}")
         validate_queue_schema(connection)
         validate_queue_contents(connection, expected_chat_id=expected_chat_id)
@@ -876,7 +1022,7 @@ def connect_existing_queue(
     timeout: float = 5.0,
     expected_chat_id: int | None = None,
 ) -> sqlite3.Connection:
-    """Open an existing exact v2 queue; never migrate from a producer."""
+    """Open an existing exact current-version queue; never migrate from a producer."""
     return open_queue(
         path,
         create=False,

@@ -843,7 +843,7 @@ def _queue_expected_chat_id() -> int | None:
 
 
 def _queue_connection() -> sqlite3.Connection:
-    """Connect to the supervisor-created exact v2 queue without migrating it."""
+    """Connect to the supervisor-created exact queue without migrating it."""
     _verify_private_queue_parent()
     expected_chat_id = _queue_expected_chat_id()
     connection = transition_journal.connect_existing_queue(
@@ -2873,31 +2873,17 @@ PRE_SEND_MODEL_RETRY_REASONS = frozenset(
 def leftover_unknown_has_ax_mutation(
     connection: sqlite3.Connection, event_id: str
 ) -> bool:
-    try:
-        row = connection.execute(
-            """
-            SELECT COUNT(*) FROM sqlite_master
-            WHERE type = 'table' AND name = 'pipeline_transitions'
-            """
-        ).fetchone()
-    except sqlite3.Error:
-        return True
-    if row is None or int(row[0] or 0) == 0:
-        return True
-    count = connection.execute(
-        """
-        SELECT COUNT(*) FROM pipeline_transitions
-        WHERE event_id = ?
-          AND (
-            (component = 'ax' AND code IN ('ax_mutation_authorized', 'local_db_confirmed'))
-            OR (component = 'pre_send' AND to_state IN ('ready', 'sending'))
-            OR from_state = 'sending'
-            OR to_state = 'sending'
-          )
-        """,
+    """Whether Return may have been pressed for this job.
+
+    Read from the job row, never the transition journal: the journal cap
+    deletes a job's rows once newer rows fill it, and their absence proves
+    nothing.
+    """
+    row = connection.execute(
+        "SELECT ax_mutation_authorized FROM reply_jobs WHERE event_id = ?",
         (event_id,),
     ).fetchone()
-    return int(count[0] or 0) > 0
+    return row is None or bool(row[0])
 
 
 def _rebind_formed_reply_to_live_owner(row: sqlite3.Row) -> str | None:
@@ -2916,13 +2902,17 @@ def _rebind_formed_reply_to_live_owner(row: sqlite3.Row) -> str | None:
     event.pop("candidate", None)
     return json.dumps(event, ensure_ascii=False, separators=(",", ":"))
 
-def _confirmed_self_reply_log_id(reply: str, after_log_id: int | None) -> int | None:
-    text = str(reply or "").strip()
-    if not text:
-        return None
+CONFIRMATION_READ_ROWS = 8
+
+
+def _recent_room_rows() -> list | None:
+    """The room's newest CONFIRMATION_READ_ROWS rows, oldest first, or None."""
     try:
         returncode, stdout_bytes, _ = _run_bounded_process(
-            [str(BIN), "local-read", str(_queue_expected_chat_id()), "--count", "8", "--json"],
+            [
+                str(BIN), "local-read", str(_queue_expected_chat_id()),
+                "--count", str(CONFIRMATION_READ_ROWS), "--json",
+            ],
             cwd=ROOT,
             env=os.environ.copy(),
             timeout=8.0,
@@ -2937,22 +2927,75 @@ def _confirmed_self_reply_log_id(reply: str, after_log_id: int | None) -> int | 
         rows = json.loads(stdout_bytes.decode("utf-8"))
     except (UnicodeError, json.JSONDecodeError):
         return None
-    if not isinstance(rows, list):
+    return rows if isinstance(rows, list) else None
+
+
+def _own_row_log_id(row: object, text: str) -> int | None:
+    """The log id of `row` when it is this room's own row reading exactly `text`."""
+    if not isinstance(row, dict) or not _is_self_chat_row(row):
+        return None
+    if "chat_id" in row and _fence_int(row["chat_id"]) != _queue_expected_chat_id():
+        return None
+    if str(row.get("message") or "").strip() != text:
+        return None
+    log_id = row.get("log_id")
+    if not isinstance(log_id, int) or isinstance(log_id, bool) or log_id <= 0:
+        return None
+    return log_id
+
+
+def _confirmed_self_reply_log_id(reply: str, after_log_id: int | None) -> int | None:
+    """The newest own row reading exactly `reply` after `after_log_id`."""
+    text = str(reply or "").strip()
+    if not text:
+        return None
+    rows = _recent_room_rows()
+    if rows is None:
         return None
     for row in reversed(rows):
-        if not isinstance(row, dict) or not _is_self_chat_row(row):
-            continue
-        if "chat_id" in row and _fence_int(row["chat_id"]) != _queue_expected_chat_id():
-            continue
-        if str(row.get("message") or "").strip() != text:
-            continue
-        log_id = row.get("log_id")
-        if not isinstance(log_id, int) or isinstance(log_id, bool) or log_id <= 0:
-            continue
-        if after_log_id is not None and log_id <= after_log_id:
-            continue
-        return log_id
+        log_id = _own_row_log_id(row, text)
+        if log_id is not None and (after_log_id is None or log_id > after_log_id):
+            return log_id
     return None
+
+
+def _send_confirmation_log_id(reply: str, pre_send_tail_log_id: object) -> int | None:
+    """The row one send added, judged the way local-send confirms it.
+
+    Only a row newer than the room's tail before the send counts, so a matching
+    row the account wrote earlier is never this send's proof. Two matching rows
+    are a duplicate, not a confirmation. A page that does not reach back to the
+    tail could hide one, so it confirms nothing either.
+    """
+    text = str(reply or "").strip()
+    if (
+        not text
+        or isinstance(pre_send_tail_log_id, bool)
+        or not isinstance(pre_send_tail_log_id, int)
+        or pre_send_tail_log_id <= 0
+    ):
+        return None
+    rows = _recent_room_rows()
+    if rows is None:
+        return None
+    reaches_tail = len(rows) < CONFIRMATION_READ_ROWS or any(
+        isinstance(row, dict)
+        and isinstance(row.get("log_id"), int)
+        and not isinstance(row.get("log_id"), bool)
+        and row["log_id"] <= pre_send_tail_log_id
+        for row in rows
+    )
+    if not reaches_tail:
+        return None
+    matches = [
+        log_id
+        for row in rows
+        if isinstance(row, dict)
+        and row.get("message_type", 1) == 1
+        and (log_id := _own_row_log_id(row, text)) is not None
+        and log_id > pre_send_tail_log_id
+    ]
+    return matches[0] if len(matches) == 1 else None
 def later_self_already_replied(
     after_log_id: int | None, reply: str | None = None
 ) -> bool:
@@ -3125,11 +3168,11 @@ def leftover_pre_send_unknown_skip_fields(
                     "error_class": None,
                 }
         if ax_mutated:
-            # `ax_mutation_authorized` is only journalled when the job moves to
-            # `sending`, so the send may already have happened and the exact
-            # match just scrolled past the bounded local-read window. A missing
-            # match is not proof of non-delivery: keep delivery_unknown instead
-            # of rescheduling and risking a duplicate send (2026-09-13).
+            # The job was committed to `sending`, so the send may already have
+            # happened and the exact match just scrolled past the bounded
+            # local-read window. A missing match is not proof of non-delivery:
+            # keep delivery_unknown instead of rescheduling and risking a
+            # duplicate send (2026-09-13).
             return None
         if _row_event_is_proactive(row) and not _proactive_unix_leftover_job(row):
             delay = row["scheduled_delay_seconds"] or MIN_REPLY_DELAY_SECONDS
@@ -3367,16 +3410,7 @@ def _queue_reconciliation_blockers(connection: sqlite3.Connection) -> int:
                 reply IS NOT NULL
                 AND length(reply) > 0
                 AND COALESCE(json_extract(event_json, '$.proactive'), 0) != 1
-                AND NOT EXISTS (
-                  SELECT 1 FROM pipeline_transitions t
-                  WHERE t.event_id = reply_jobs.event_id
-                    AND (
-                      (t.component = 'ax' AND t.code IN ('ax_mutation_authorized', 'local_db_confirmed'))
-                      OR (t.component = 'pre_send' AND t.to_state IN ('ready', 'sending'))
-                      OR t.from_state = 'sending'
-                      OR t.to_state = 'sending'
-                    )
-                )
+                AND ax_mutation_authorized = 0
               )
               OR EXISTS (
                 SELECT 1 FROM pipeline_transitions t
@@ -10372,9 +10406,9 @@ def _pre_mutation_send_hold(
 ) -> str | None:
     """Last hold check that can still prevent the composing mutation.
 
-    The read-only preflight and the composer allowlist write can take seconds,
-    so a draft that was valid when the job was claimed can age out, or the room
-    can move on, before the mutation runs. Committing ``sending`` has no way
+    The read-only preflight can take seconds, so a draft that was valid when
+    the job was claimed can age out, or the room can move on, before the
+    mutation runs. Committing ``sending`` has no way
     back, which is why this runs immediately before it (AHP:
     intervention_timing).
     """
@@ -13660,7 +13694,6 @@ def send_reply(
     if inbound_quote:
         command.extend(["--reply-to", inbound_quote])
     composer_allowlist_path = Path(str(QUEUE)).parent / "composer-allowlist.json"
-    _allow_composer_draft(composer_allowlist_path, reply)
     worker_environment = _local_send_environment(
         event, expected_target_chat_id, composer_allowlist_path
     )
@@ -13728,6 +13761,9 @@ def send_reply(
         )
         if transition != "updated":
             return False
+    # Only now may this reply end up in the composer, so only now may the CLI
+    # treat a composer holding it as the worker's own leftover.
+    _allow_composer_draft(composer_allowlist_path, reply)
     try:
         returncode, stdout_bytes, _ = _run_bounded_process(
             command,
@@ -13750,11 +13786,6 @@ def send_reply(
         and result.get("confirmed") is False
         and event_id
     ):
-        inbound = None
-        if isinstance(event, dict):
-            inbound = event.get("log_id")
-            if not isinstance(inbound, int) or isinstance(inbound, bool):
-                inbound = None
         reply_text = ""
         if connection is not None:
             queued = connection.execute(
@@ -13763,7 +13794,9 @@ def send_reply(
             ).fetchone()
             if queued is not None:
                 reply_text = str(queued["reply"] or "")
-        confirmed = _confirmed_self_reply_log_id(reply_text, inbound)
+        confirmed = _send_confirmation_log_id(
+            reply_text, result.get("pre_send_tail_log_id")
+        )
         if confirmed is not None:
             result["status"] = "confirmed_local_db"
             result["confirmed"] = True
