@@ -75,17 +75,16 @@ ANN_BITS_PER_BAND = 8
 # 71.139ms였다. 모양별 행렬을 한 번 만들면(콜드 63.41ms, 웜 2.4us) 같은
 # 질의가 6.032ms이고, 50개 벡터는 3,560.9ms에서 320.9ms가 된다. 부호가
 # 그대로라 버킷 키도 그대로이고, 이미 만들어진 ann_buckets 테이블과도
-# 호환된다(2026-09-22).
+# 호환된다.
 _ANN_SIGN_MATRIX_CACHE: dict[tuple[int, int], tuple[bytes, ...]] = {}
 _ANN_SIGN_MATRIX_CACHE_MAX_SHAPES = 8
-ALIAS_DICTIONARY_VERSION = "2026-09-20.1"
 KST = ZoneInfo("Asia/Seoul")
 
 # Provenance kinds. "seed" is a hand-written starting node that no message
 # backs yet; "ledger" means a real room message was found to mention the node.
 # The 6 Pro review rejected nodes that carried no source message id, room id,
 # confirmation time or retraction state, so every node and edge now reports
-# which of the two it is and what backs it (2026-09-16).
+# which of the two it is and what backs it.
 PROVENANCE_SEED = "seed"
 PROVENANCE_LEDGER = "ledger"
 MAX_EVIDENCE_PER_NODE = 8
@@ -166,7 +165,6 @@ def stable_node_id(entity_id: str) -> int:
     fresh interpreter on every refresh. Python's ``hash()`` is salted per
     process, so ids changed on every poll and a selected row was lost between
     reads. CRC32 of the entity id is stable across processes and machines
-    (2026-09-16).
     """
     return zlib.crc32(entity_id.encode("utf-8")) % 10000000
 
@@ -338,7 +336,7 @@ def _connect_kg(db_path: Path) -> sqlite3.Connection:
         )
     """)
     # Existing graphs predate the evidence columns; add them in place so an
-    # installed graph keeps its rows instead of being rebuilt (2026-09-16).
+    # installed graph keeps its rows instead of being rebuilt.
     for table in ("kg_entities", "kg_relations"):
         try:
             columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
@@ -585,7 +583,7 @@ def _room_ledgers(state_root: Path) -> list[Path]:
 # The graph used to be five hand-written nodes, so it could not answer anything
 # the author had not thought of in advance: the room discussed Alibaba Cloud
 # for an hour and the graph still had nothing to say about it. These rows turn
-# the index into neurons and synapses (2026-09-16).
+# the index into neurons and synapses.
 INDEX_TOPIC_LABELS = {
     "coins": "코인",
     "stocks": "주식",
@@ -614,7 +612,7 @@ INDEX_TOPIC_MIN_MESSAGES = 20
 # 방에서 누구와 나눈 이야기인지는 몰랐다. 답변에 필요한 것은 주제만이
 # 아니라 그 주제가 누구의 어떤 맥락이었는가다. 방과 사람을 따로 세우고
 # 주제와 이어 두면, 같은 "주식"이라도 성린이형 방의 주식과 부자멘토멘티의
-# 주식이 다른 자리로 남는다 (2026-09-16, 사용자 지시).
+# 주식이 다른 자리로 남는다 (사용자 지시).
 INDEX_CHAT_MIN_MESSAGES = 40
 INDEX_PERSON_MIN_MESSAGES = 25
 # 한 방에서 이 사람의 메시지가 이 비율을 넘으면 그 방의 중심 인물로 본다.
@@ -630,7 +628,7 @@ INDEX_TOPIC_SAMPLE_MESSAGES = 60
 
 # A neuron's facts should quote the people in the room, not the bots that post
 # into it. Without this every 인프라 fact was a GeekNews digest line and the
-# node said nothing about what the members actually discussed (2026-09-16).
+# node said nothing about what the members actually discussed.
 INDEX_SAMPLE_SKIP_AUTHORS = (
     "드리고",
     "드리고봇",
@@ -727,7 +725,7 @@ def _copy_consistent_sqlite_replica(db_path: Path, tmpdir: Path) -> Path:
 @contextmanager
 def _open_isolated_ro_conn(db_path: Path):
     """DB Lock 방지: 카카오톡 DB 동기화 시 실행 중 파일 잠금을 방지하기 위해
-    임시 디렉터리로 복제한 뒤 Read Only 모드로 안전하게 연결한다 (2026-09-17).
+    임시 디렉터리로 복제한 뒤 Read Only 모드로 안전하게 연결한다.
     """
     if not db_path.exists():
         raise FileNotFoundError(f"Database not found: {db_path}")
@@ -953,7 +951,7 @@ def _index_topic_samples(
     # B-tree over every message the topic ever had, which cost 6.7s for 13
     # topics. The topic index is keyed (topic, message_id), so walking it
     # backwards yields the newest ids directly and any sorting happens in
-    # Python on at most `want` rows (2026-09-16).
+    # Python on at most `want` rows.
     want = max(int(limit), 1)
     try:
         row = conn.execute(
@@ -1012,7 +1010,7 @@ def _synapse_weight(count: int) -> int:
 
     ``30 + count`` pushed every busy pair to the ceiling: 코인-주식 and
     연락-주식 both drew at 99, so the picture showed no difference between the
-    strongest and the weakest link. A log curve keeps them apart (2026-09-16).
+    strongest and the weakest link. A log curve keeps them apart.
     """
     count = max(int(count), 1)
     return max(30, min(99, 30 + int(round(20 * math.log10(count + 1)))))
@@ -1047,7 +1045,7 @@ def _room_titles(state_root: Path) -> dict[str, str]:
     색인에는 방이 ``그룹:325472527151234``처럼 번호로만 남는 경우가 많다.
     메뉴바가 이미 방 목록을 카탈로그에 적어 두므로, 그래프도 같은 이름을
     써야 표와 그림이 같은 방을 다른 이름으로 부르지 않는다. 읽지 못하면
-    빈 표를 돌려주고 번호 이름을 그대로 쓴다 (2026-09-16).
+    빈 표를 돌려주고 번호 이름을 그대로 쓴다.
     """
     path = state_root / "menubar-room-catalog.json"
     try:
@@ -1077,7 +1075,7 @@ def _room_key(state_root: Path, chat: str) -> str:
     ``그룹:325472527151234``로 적고, 어떤 경로는 사람이 읽는 이름을 안다.
     그래서 같은 방에 뉴런이 둘 서고, 방 안의 사람도 두 벌로 갈렸다.
     카탈로그가 번호와 이름을 모두 알고 있으므로 번호를 이름으로 바꿔
-    하나로 모은다. 카탈로그에 없으면 원래 키를 그대로 쓴다 (2026-09-16).
+    하나로 모은다. 카탈로그에 없으면 원래 키를 그대로 쓴다.
     """
     raw = (chat or "").strip()
     if not raw:
@@ -1093,7 +1091,7 @@ def _merge_seed_rooms(conn: sqlite3.Connection) -> int:
     ``chat:부자멘토멘티``로 만든다. 둘 다 남으면 같은 방이 그림에 두 번
     서고, 손으로 적은 쪽의 시냅스(알쫀쿠 추천 등)는 색인 쪽과 이어지지
     않아 그래프가 끊긴다. 색인 뉴런으로 옮겨 붙이고 옛 뉴런은 지운다.
-    옮길 곳이 없으면 그대로 둔다 (2026-09-16).
+    옮길 곳이 없으면 그대로 둔다.
     """
     moved = 0
     for entity_id, name in list(
@@ -1136,7 +1134,7 @@ def index_chat_entities(
 
     방 뉴런이 있어야 "어디서 나눈 이야기인가"가 그래프에 남는다. 주제
     뉴런만 있으면 같은 주제를 여러 방에서 나눠도 한 덩어리로 뭉쳐, 답변이
-    엉뚱한 방의 맥락을 끌어온다 (2026-09-16).
+    엉뚱한 방의 맥락을 끌어온다.
     """
     stats = {"chats": 0, "written": 0}
     index_path = _index_db_path(state_root)
@@ -1161,7 +1159,7 @@ def index_chat_entities(
     finally:
         # with 블록이 실패하면 index_conn 이 할당되지 않아, 여기서 바로
         # 닫으면 UnboundLocalError 가 원래 예외를 덮어쓴다. 자식 프로세스가
-        # exit 1 로만 죽어 원인을 알 수 없던 이유다 (2026-09-17).
+        # exit 1 로만 죽어 원인을 알 수 없던 이유다.
         if index_conn is not None:
             try:
                 index_conn.close()
@@ -1169,7 +1167,7 @@ def index_chat_entities(
                 pass
     now = int(time.time())
     # 같은 방이 두 키로 들어오면 여기서 하나로 합친다. 합치지 않으면
-    # 방 뉴런이 둘 서고 방 안의 사람도 두 벌로 갈린다 (2026-09-16).
+    # 방 뉴런이 둘 서고 방 안의 사람도 두 벌로 갈린다.
     merged: dict[str, list[Any]] = {}
     for room, count, first, last in rows:
         key = _room_key(state_root, str(room))
@@ -1229,7 +1227,7 @@ def index_person_entities(
 
     사람 뉴런은 방 뉴런에 매인다. 같은 이름이 여러 방에 있어도 방마다 다른
     뉴런이 되어, "성린이형 방의 성린이"와 다른 방의 동명이인이 섞이지 않는다
-    (2026-09-16, 사용자 지시).
+    (사용자 지시).
     """
     stats = {"persons": 0, "written": 0, "with_lines": 0}
     index_path = _index_db_path(state_root)
@@ -1264,7 +1262,6 @@ def index_person_entities(
                 totals[str(room)] = int(count or 0)
             # 방 키를 하나로 모은 뒤에 사람을 센다. 같은 방이 두 키로 들어오면
             # 한 사람이 두 뉴런으로 갈리고, 방마다 세는 상한도 두 번 적용된다
-            # (2026-09-16).
             merged: dict[tuple[str, str], int] = {}
             raw_keys: dict[str, list[str]] = {}
             for room, user, count in rows:
@@ -1292,7 +1289,7 @@ def index_person_entities(
                 # 방 이름과 같다. 그래서 "커리어톡 (커리어톡)" 같은 뉴런이 방
                 # 뉴런 바로 옆에 하나 더 서서, 같은 것을 가리키는 두 이름이 그림에
                 # 겹쳐 보였다. 방 이름과 같은 화자는 방 뉴런이 이미 말하고 있으므로
-                # 사람 뉴런으로 세우지 않는다 (2026-09-16, 6 Pro 지적).
+                # 사람 뉴런으로 세우지 않는다.
                 room_name = _chat_label(room_key)
                 if name.casefold() == room_name.casefold():
                     continue
@@ -1361,7 +1358,7 @@ def _index_person_lines(
     """이 사람이 실제로 남긴 최근 대화 몇 줄.
 
     요약이 아니라 발언 원문이다. 답변이 그 사람의 말투와 관심사를 그대로
-    참고할 수 있어야 한다 (2026-09-16).
+    참고할 수 있어야 한다.
     """
     keys = [chats] if isinstance(chats, str) else list(chats)
     if not keys:
@@ -1473,7 +1470,7 @@ def index_topic_relations(
 
     Two topics mentioned in the same message are related, and the number of
     such messages is the weight. That is what makes the picture a network
-    rather than a list of separate circles (2026-09-16).
+    rather than a list of separate circles.
     """
     stats = {"pairs": 0, "written": 0}
     index_path = _index_db_path(state_root)
@@ -1539,7 +1536,7 @@ def index_membership_relations(
     - 사람 → 주제 (TALKS_ABOUT): 이 사람이 이 주제를 자주 꺼낸다
 
     세 번째가 답변에 가장 쓸모 있다. 같은 "주식"이라도 누가 꺼낸
-    이야기인지에 따라 답이 달라지기 때문이다 (2026-09-16, 사용자 지시).
+    이야기인지에 따라 답이 달라지기 때문이다 (사용자 지시).
     """
     stats = {"person_chat": 0, "chat_topic": 0, "person_topic": 0}
     index_path = _index_db_path(state_root)
@@ -1670,17 +1667,16 @@ def prune_indexed_entities(
     색인에서 빠진 대화가 그래프에 그대로 남았다. 그래서 같은 방을 가리키는
     두 뉴런("커리어톡"과 "커리어톡 (커리어톡)")이 나란히 서고, 지워진 주제도
     계속 그려졌다. 색인으로 만든 뉴런 중 이번 주기에 다시 쓰이지 않은 것을
-    지우고, 그 뉴런에 매달린 시냅스도 함께 지운다 (2026-09-16, 사용자 지시).
+    지우고, 그 뉴런에 매달린 시냅스도 함께 지운다 (사용자 지시).
 
     손으로 적은 기본 뉴런(ent:*)과 원장에서 온 근거는 건드리지 않는다.
 
     기준 시각은 이번 주기가 시작된 때다. "일주일보다 오래된 것"을 지우면
     이번에 방 이름이 바뀌어 다시 쓰이지 않은 옛 뉴런이 그대로 남는다
-    (2026-09-16).
 
     색인을 읽지 못한 채 이 함수가 돌면 그래프가 통째로 비어 버린다.
     지우는 수가 절반을 넘으면 색인 쪽이 고장 난 것으로 보고 아무것도
-    지우지 않는다 (2026-09-16).
+    지우지 않는다.
     """
     cutoff = int(cycle_started_at)
     stale = [
@@ -1841,7 +1837,7 @@ def wait_for_background_reindex(timeout: float = 30.0) -> bool:
     
     The menu bar must never wait, but a caller that needs a settled graph
     (a test, or a one-shot export) can. Returns True when nothing is left
-    running (2026-09-17).
+    running.
     """
     deadline = time.time() + max(0.0, timeout)
     while time.time() < deadline:
@@ -1866,7 +1862,6 @@ def _start_background_reindex(
     Returns a small status dict the caller can report. A second call while one
     is already running returns {"started": False, "reason": "in_flight"} so the
     caller keeps serving the stored graph instead of stacking work
-    (2026-09-17, 6 Pro 지적).
     """
     global _reindex_inflight, _reindex_last_started_at
     started_at = int(cycle_started_at or time.time())
@@ -1874,7 +1869,7 @@ def _start_background_reindex(
         # 프로세스 모드에서는 자식이 잠금 파일을 들고 있다. 부모의 메모리
         # 플래그는 쓰지 않는다. 부모는 자식이 언제 끝나는지 볼 수 없으므로,
         # 플래그를 잡으면 부모가 사는 동안 영원히 in_flight 로 남아 재색인이
-        # 다시는 걸리지 않는다 (2026-09-17).
+        # 다시는 걸리지 않는다.
         if _reindex_process_running(state_root):
             return {"started": False, "reason": "in_flight"}
         if _spawn_reindex_process(state_root, chat=chat, cycle_started_at=started_at):
@@ -1916,8 +1911,8 @@ def _start_background_reindex(
 
     # 메뉴바는 이 모듈을 짧게 사는 프로세스로 부른다. 데몬 스레드는 그
     # 프로세스가 끝나면 함께 죽어 재색인이 반쯤 돌다 만 채로 남는다. 그래서
-    # 기본값(mode="process")은 스스로 살아남는 자식 프로세스다 (2026-09-17,
-    # 사용자 지시). 테스트는 "thread", 일회성 내보내기는 "inline" 으로 돈다.
+    # 기본값(mode="process")은 스스로 살아남는 자식 프로세스다 (사용자 지시).
+    # 테스트는 "thread", 일회성 내보내기는 "inline" 으로 돈다.
     thread = threading.Thread(target=_run, name="kg-reindex", daemon=True)
     thread.start()
     return {"started": True, "chat": chat, "cycle_started_at": started_at, "mode": mode}
@@ -1927,7 +1922,7 @@ def _reindex_process_running(state_root: Path) -> bool:
     """True when a detached child already holds the reindex lock.
 
     The lock file is the only thing the parent and the child share, so it is
-    also the only honest answer to whether a walk is still going (2026-09-17).
+    also the only honest answer to whether a walk is still going.
     """
     lock_path = state_root / "knowledge-graph-reindex.lock"
     try:
@@ -1957,7 +1952,6 @@ def _spawn_reindex_process(
 
     Returns True when a child was started. The child holds the same lock file
     the in-process guard uses, so a burst of menu polls still starts one walk
-    (2026-09-17).
     """
     lock_path = state_root / "knowledge-graph-reindex.lock"
     try:
@@ -2034,7 +2028,6 @@ def _reindex_once_entry(argv: list[str]) -> int:
     except Exception as error:
         # 자식은 어떤 경우에도 조용히 끝난다. 메뉴가 읽는 것은 상태 파일이지
         # 이 프로세스의 종료 코드가 아니다. 다만 왜 죽었는지는 남긴다
-        # (2026-09-17).
         write_meta(conn, "last_index_error", f"detached: {type(error).__name__}: {error}"[:400])
         return 1
     finally:
@@ -2057,12 +2050,11 @@ def _reindex_all(
     This is the body that used to run inline in collect_knowledge_graph.
     Each step is isolated: a failure in one indexer must not stop the others,
     because a graph with topics but no rooms is still better than no refresh
-    (2026-09-16, 2026-09-17).
 
     A step that dies is recorded in kg_meta instead of being swallowed. The
     menu showed a freshly indexed, empty graph while every indexer had been
     failing on a NameError that only the real database path reached
-    (2026-09-17, 사용자 지시).
+    (사용자 지시).
     """
     failures: list[str] = []
 
@@ -2089,7 +2081,6 @@ def _reindex_all(
     if failures:
         # 실패를 남기고 "색인했다"는 도장은 찍지 않는다. 찍으면 다음 폴링이
         # 같은 일을 다시 하지 않아 그래프가 영영 낡은 채로 남는다
-        # (2026-09-17).
         write_meta(conn, "last_index_error", " | ".join(failures))
         if any("isolated read-only snapshot unavailable" in failure for failure in failures):
             # 카카오 원본 DB로 폴백하지 않았음을 상태 화면에서도 확인할 수
@@ -2099,7 +2090,7 @@ def _reindex_all(
         write_meta(conn, "last_index_error", "")
         write_meta(conn, "last_snapshot_status", "copy_ok")
         # 이번 색인이 언제 끝났는지 남긴다. 이 값이 없으면 다음 폴링이 방금
-        # 끝난 색인을 모르고 같은 일을 다시 시작한다 (2026-09-17).
+        # 끝난 색인을 모르고 같은 일을 다시 시작한다.
         # Dense는 optional이므로 이 도장은 dense endpoint 상태와 독립적이다.
         write_meta(conn, "last_indexed_at", str(int(time.time())))
 
@@ -2140,12 +2131,11 @@ def collect_knowledge_graph(
     A refresh normally runs in the background so the menu bar never blocks on
     the 1.4GB context DB. Set ``wait_for_reindex`` when the caller needs a settled
     graph before reading rows: a one-shot export, or a test asserting on
-    freshly indexed evidence (2026-09-17, 6 Pro 지적).
+    freshly indexed evidence.
 
     reindex_mode picks who walks the index when wait_for_reindex is false:
     "process" detaches a child that outlives the short-lived menu call,
     "thread" keeps the walk in this process so a test can wait for it
-    (2026-09-17).
     """
     kg_path = db_path.parent / KNOWLEDGE_GRAPH_DB_NAME
     try:
@@ -2153,7 +2143,7 @@ def collect_knowledge_graph(
         conn = _connect_kg(kg_path)
     except (OSError, sqlite3.Error) as error:
         # A window that cannot reach its store must draw an empty graph and say
-        # why, not take the menu down with it (2026-09-16).
+        # why, not take the menu down with it.
         return {
             "ok": False,
             "nodes": [],
@@ -2170,13 +2160,13 @@ def collect_knowledge_graph(
         # 이미 색인된 데이터가 있고 최근(기본 5분)에 갱신되었다면 매번
         # 1.4GB DB 전체를 다시 훑지 않고 저장된 그래프를 즉시 반환한다.
         # 메뉴바 폴링(2초 주기)과 감사에서 프로세스가 25초 타임아웃에
-        # 걸려 빈 그래프로 떨어지는 병목을 해결한다 (2026-09-17).
+        # 걸려 빈 그래프로 떨어지는 병목을 해결한다.
         now = int(time.time())
         # 색인 시각은 메타에 남는다. 예전에는 뉴런의 updated_at 최댓값을
         # 썼는데, 손으로 적은 시드 뉴런만 있는 그래프에서는 그 값이 방금
         # 갱신된 것으로 보여 재색인이 영원히 걸리지 않았다. 반대로 색인할
         # 대화가 없으면 개수가 0이라 매 폴링마다 재색인이 걸렸다. 이제
-        # "언제 색인을 끝냈는가"를 직접 기록해 둘 다 피한다 (2026-09-17).
+        # "언제 색인을 끝냈는가"를 직접 기록해 둘 다 피한다.
         try:
             indexed_count = int(
                 conn.execute(
@@ -2195,7 +2185,6 @@ def collect_knowledge_graph(
         # 메타가 없으면(=예전 그래프) 한 번은 다시 색인한다. 행의 updated_at
         # 으로 대신하면, 방금 심은 시드 뉴런의 시각이 "최신"으로 읽혀 색인이
         # 영영 돌지 않는다. 그게 6 Pro가 지적한 빈 그래프의 원인이었다
-        # (2026-09-17).
         needs_reindex = force_reindex or (
             last_updated == 0 or now - last_updated >= reindex_interval_seconds
         )
@@ -2212,7 +2201,6 @@ def collect_knowledge_graph(
             # 동기로 돌려, 캐시가 만료된 첫 조회가 25초 타임아웃에 걸려 빈
             # 그래프로 떨어졌다. 지금은 저장된 그래프를 즉시 돌려주고,
             # 재색인은 백그라운드에서 돌린 뒤 다음 폴링이 새 그림을 읽는다
-            # (2026-09-17, 6 Pro 지적).
             if wait_for_reindex:
                 # 동기 경로: 재색인이 끝난 뒤의 그래프를 이 응답에 담는다.
                 _reindex_all(conn, state_root, chat=chat, cycle_started_at=now)
@@ -2397,14 +2385,15 @@ def collect_knowledge_graph_list(
                 )
             except (TypeError, ValueError):
                 evidence = _seed_evidence()
-            aliases = json.loads(aliases_str)
+            # Parsed only to reject a corrupt row; the aliases are not shown.
+            json.loads(aliases_str)
             facts = json.loads(facts_str)
             connected = rel_map.get(eid, [])
             
             body_parts = [
                 f"【{name}】 ({cat})",
                 f"설명: {desc}",
-                f"주요 사실/맥락:",
+                "주요 사실/맥락:",
             ]
             for fact in facts:
                 body_parts.append(f"  • {fact}")
@@ -2413,7 +2402,7 @@ def collect_knowledge_graph_list(
                 for rel in connected:
                     body_parts.append(f"  ↔ {rel}")
             # Say where the node came from, so a reader can check it instead of
-            # trusting the description (2026-09-16).
+            # trusting the description.
             if evidence["kind"] == PROVENANCE_LEDGER:
                 body_parts.append(
                     "근거: 원문 메시지 "
@@ -2465,7 +2454,7 @@ def collect_knowledge_graph_list(
         # 목록 봉투는 다른 보기(messages·style·topics…)와 같은 모양이어야 한다.
         # 창은 ok·rows·count·truncated를 읽는다. 예전에는 items·has_more로
         # 돌려주어 디코딩이 통째로 실패했고, 지식 그래프를 고르면 69개 뉴런이
-        # 있는데도 "기록 없음"만 떴다 (2026-09-16).
+        # 있는데도 "기록 없음"만 떴다.
         return {
             "ok": True,
             "action": "vector-list",
@@ -2501,7 +2490,6 @@ SYNONYM_DICTIONARY = {
     "가상화폐": ["코인", "비트코인"],
     # 별칭이 영어 정식 이름이고 질문은 줄임말일 때도 만나야 한다. 사전이
     # 한글 키만 있으면 "Anthropic Claude" 같은 별칭은 "클로드"를 못 찾았다
-    # (2026-09-19).
     "claude": ["클로드", "앤트로픽 클로드", "anthropic claude"],
     "chatgpt": ["지피티", "챗지피티", "gpt", "openai"],
     "qwen": ["큐웬", "큐웬3.8", "qwen3.8"],
@@ -2531,7 +2519,6 @@ def _build_synonym_index(
     (낱말, 바늘더미) 한 쌍당 실측 4.34us가 그 비용이었고, 조회표를 쓰면
     1.10us다. 접힌 항목은 원래 키를 그대로 들고 있어서 문맥 게이트
     (`CONTEXT_GATED_SYNONYM_KEYS`)는 예전과 같은 원문 키로 비교한다
-    (2026-09-22).
     """
 
     index: dict[str, list[tuple[str, str, tuple[str, ...]]]] = {}
@@ -2619,7 +2606,7 @@ def normalize_text_query(text: str, *, message_timestamp: Any = None) -> str:
 
     답변 생성은 이 함수를 거친 질의로 그래프를 찾는다. 사용자가 "러닝박에"나
     "오늘 아침"처럼 써도 그래프의 "러닝"·"아침(8시)" 노드와 같은 말로 만나게
-    하는 것이 목적이다. 여러 번 불러도 같은 결과가 나온다(2026-09-19).
+    하는 것이 목적이다. 여러 번 불러도 같은 결과가 나온다.
 
     예전 본문의 시간 규칙에는 단어 경계를 뜻하는 역슬래시-b 대신 진짜
     백스페이스 문자가 들어가 있었다. 그 규칙은 아무것도 바꾸지 못했고,
@@ -2648,7 +2635,7 @@ def query_haystacks(
     """질의와 곁말을 원문과 표준형으로 함께 모은다.
 
     원문을 지우지 않는다. 오타 사전이 모르는 표기를 표준형이 지워 버릴 수
-    있어서 둘 다 바늘더미에 남긴다. 원문이 먼저다(2026-09-19).
+    있어서 둘 다 바늘더미에 남긴다. 원문이 먼저다.
     """
 
     haystacks: list[str] = []
@@ -2701,7 +2688,6 @@ def _alias_matches(
 
 
 KNOWLEDGE_EMBEDDING_DIM = 128
-VECTOR_CANDIDATE_MIN = 0.0
 
 
 def _deterministic_text_embedding(
@@ -3791,7 +3777,7 @@ def retrieve_knowledge_bundle(
     """GraphRAG + BM25/Dense RRF 검색 번들 반환.
 
     엔티티와 관계(트리플)가 한쪽에 편중되지 않도록 균형 예산을 적용하며,
-    방 ID와 방 이름을 상호 확인하여 방 간 데이터 격리를 보장한다 (2026-09-17).
+    방 ID와 방 이름을 상호 확인하여 방 간 데이터 격리를 보장한다.
     Dense 실패 시 모드는 bm25_only이며 hybrid/rrf로 표시하지 않는다.
     """
     ranked = _query_knowledge_ranked(
@@ -3902,7 +3888,7 @@ def _query_knowledge_ranked(
     Cloud pricing and then sent a bare photo. Matching only the incoming
     "사진" retrieved nothing, so the answer that followed had no idea the
     conversation was about cloud subscriptions, even though the graph held
-    that fact (2026-09-16). The caller passes the recent conversation here.
+    that fact. The caller passes the recent conversation here.
 
     Every additional source is matched at lower precedence than the incoming
     message, and the returned lines keep their category and name so the model
@@ -3924,7 +3910,7 @@ def _query_knowledge_ranked(
     }
     if not haystacks:
         # 빈 질의로도 불린다. 여기서 리스트 하나를 돌려주면 호출자의 세 값
-        # 언패킹이 깨져 조회 전체가 실패한다(2026-09-19).
+        # 언패킹이 깨져 조회 전체가 실패한다.
         return empty
     root = state_root or Path.home() / "Library/Application Support/openkakao/bujamentor"
     kg_path = root / KNOWLEDGE_GRAPH_DB_NAME
@@ -3940,7 +3926,6 @@ def _query_knowledge_ranked(
         # 예전에는 부분 문자열로 비교했다. 그러면 방 이름이 다른 방 이름의
         # 일부일 때 정상 노드가 걸러지고, 반대로 짧은 키는 남의 방 노드를
         # 통과시킨다. 허용 집합을 만든 뒤 완전 일치만 통과시킨다
-        # (2026-09-17, 6 Pro 지적).
         allowed_rooms: set[str] = set()
         if chat_str:
             allowed_rooms.add(chat_str)
