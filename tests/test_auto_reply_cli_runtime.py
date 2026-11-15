@@ -720,17 +720,17 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
             def gauss(_mean, _spread):
                 return 40.0
 
+        # A statement keeps the learned mixture, uncapped: only questions are
+        # pinned to one component.
         social = module.sample_response_delay_for_analysis(
             stats,
             {"category": "social", "reason": "useful_reply"},
             rng=ShortRng(),
         )
         self.assertEqual(social["component"], "short")
-        self.assertEqual(social["delay_seconds"], 20.0)
-        self.assertEqual(
-            social["scheduled_delay_cap_seconds"],
-            module.SCHEDULED_REPLY_DELAY_CAP_SECONDS,
-        )
+        self.assertEqual(social["component_selection"], "learned_mixture")
+        self.assertEqual(social["delay_seconds"], 40.0)
+        self.assertIsNone(social.get("scheduled_delay_cap_seconds"))
 
         class WideShortRng:
             @staticmethod
@@ -741,13 +741,14 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
             def gauss(_mean, _spread):
                 return 140.0
 
-        capped = module.sample_response_delay_for_analysis(
+        caption = module.sample_response_delay_for_analysis(
             stats,
             {"category": "social", "reason": "story_reaction"},
             rng=WideShortRng(),
         )
-        self.assertEqual(capped["component"], "short")
-        self.assertEqual(capped["delay_seconds"], 20.0)
+        self.assertEqual(caption["component"], "short")
+        self.assertEqual(caption["component_selection"], "turn_kind_preference")
+        self.assertEqual(caption["delay_seconds"], 140.0)
 
     def test_response_turn_kind_classifies_question_caption_and_statement(self):
         module = self._load_auto_reply_module("auto_reply_turn_kind_test")
