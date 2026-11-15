@@ -1,5 +1,3 @@
-export type LifecycleState = "visible" | "hidden" | "closed" | "locked";
-
 export interface FrameScheduler {
   request(callback: FrameRequestCallback): number;
   cancel(id: number): void;
@@ -45,15 +43,6 @@ export class AnimationLoop {
       this.scheduler.cancel(this.rafId);
       this.rafId = null;
     }
-  }
-
-  handleLifecycle(state: LifecycleState): void {
-    if (state === "visible") this.start();
-    else this.stop();
-  }
-
-  isRunning(): boolean {
-    return this.running;
   }
 
   private frameIntervalMs(): number {

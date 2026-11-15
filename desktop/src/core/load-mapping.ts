@@ -2,17 +2,6 @@ import type { BackgroundStatus, JobEvent, PipelineStatus } from "../contracts";
 
 const TOTAL_BOOST = 0.35;
 
-export const PIPELINE_STAGE_IDS = [
-  "detect",
-  "authorize",
-  "queue",
-  "context",
-  "model",
-  "delay",
-  "send",
-  "confirm",
-] as const;
-
 export interface SourceLoads {
   reply: number;
   geeknews: number;

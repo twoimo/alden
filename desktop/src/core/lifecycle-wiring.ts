@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { LifecycleState } from "./animation-loop";
+import type { LifecycleState } from "./lifecycle";
 
 /** Event the Rust shell emits when it shows or hides a panel window. */
 export const VISIBILITY_EVENT = "jarvis://visibility";

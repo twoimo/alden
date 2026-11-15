@@ -1,4 +1,4 @@
-import type { LifecycleState } from "./animation-loop";
+export type LifecycleState = "visible" | "hidden" | "closed" | "locked";
 
 export interface RenderLoopControl {
   start(): void;

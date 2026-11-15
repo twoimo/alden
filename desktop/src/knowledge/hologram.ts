@@ -100,10 +100,6 @@ export class KnowledgeHologram {
     return this.loop.renderCount;
   }
 
-  get currentView(): KnowledgeView {
-    return this.view;
-  }
-
   clickNode(nodeId: string): KnowledgeView {
     const node = this.graph.nodes.find((candidate) => candidate.id === nodeId);
     if (!node) return this.view;

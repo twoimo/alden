@@ -28,22 +28,6 @@ export function voiceErrorMessage(errorCode: string | null): string | null {
   }
 }
 
-export const SETTINGS_IDS = Object.freeze([
-  "settings-room-popup",
-  "settings-add-room-select",
-  "settings-add-room-button",
-  "settings-sync-source",
-  "settings-activity-source",
-  "settings-sync-card",
-  "settings-knowledge-card",
-  "knowledge-graph-canvas",
-  "knowledge-accessible-nodes",
-  "knowledge-expand-hop",
-  "knowledge-focus-title",
-  "knowledge-relations",
-  "knowledge-retrieve",
-] as const);
-
 export function mainPanelMarkup(): string {
   return `<main class="jarvis-panel" aria-label="자비스">
     <canvas class="jarvis-core" width="${LAYOUT.coreSize}" height="${LAYOUT.coreSize}" aria-label="자비스 화면"></canvas>
@@ -274,7 +258,7 @@ export function renderRooms(snapshot: RuntimeSnapshot, root: Document = document
   if (addSelect) {
     addSelect.replaceChildren();
     const enrolledIds = new Set(snapshot.rooms.map((r) => r.chatId));
-    const candidates = (snapshot.availableChats || []).filter((c) => !enrolledIds.has(c.chatId));
+    const candidates = snapshot.availableChats.filter((c) => !enrolledIds.has(c.chatId));
     const defaultOpt = document.createElement("option");
     defaultOpt.value = "";
     defaultOpt.textContent = candidates.length > 0 ? "추가할 채팅방 선택" : "추가 가능한 새 채팅방 없음";

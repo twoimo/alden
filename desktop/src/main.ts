@@ -44,8 +44,6 @@ import { mainPanelMarkup, renderBackground, renderHistory, renderRooms, settings
 import { RESIDENT_MODEL_ID, SWAP_MODEL_ID } from "./tokens";
 import { wireVoiceStart } from "./voice-controls";
 
-export { RuntimeSnapshotPoller, type PollTimerScheduler } from "./runtime-poller";
-
 const app = document.querySelector<HTMLDivElement>("#app")!;
 if (!app) throw new Error("app_root_missing");
 
@@ -491,15 +489,12 @@ export async function bootSettings(
   }
 }
 
-type CommandInvoker = (command: string) => Promise<unknown>;
-
 interface PanelBootDependencies {
   createCore: (canvas: HTMLCanvasElement) => JarvisCoreControl | Promise<JarvisCoreControl>;
   loadSnapshot: SnapshotLoader;
   cancelSnapshot: SnapshotCanceller;
   makeToken: () => CancellationToken;
   pollScheduler: PollTimerScheduler;
-  invokeCommand: CommandInvoker;
   subscribeVisibility: VisibilitySubscriber | null;
   /** Boot handshake: the shell's current visibility decides the first state. */
   readVisibility: VisibilityReader | null;
@@ -517,7 +512,6 @@ export async function bootPanel(
     cancelSnapshot: cancelRuntimeRequest,
     makeToken: createCancellationToken,
     pollScheduler: browserPollScheduler,
-    invokeCommand: invoke,
     subscribeVisibility: tauriVisibilitySubscriber,
     readVisibility: tauriVisibilityReader,
     ...overrides,
