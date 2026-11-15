@@ -776,12 +776,6 @@ fn extend_unique<T: PartialEq>(target: &mut Vec<T>, candidates: impl IntoIterato
     }
 }
 
-/// Drive one composer submission through a fail-closed, single-Return state
-/// machine.  The callbacks keep the policy testable without a live AX session:
-/// an unreadable composer is treated as empty after focus, a foreign draft is
-/// never overwritten, an already-staged exact outbound draft is submitted
-/// without rewriting it, every successful write is re-read exactly, and a
-/// Return is never retried.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 #[allow(
     clippy::too_many_arguments,
@@ -960,6 +954,13 @@ where
     }
     Ok(())
 }
+
+/// Drive one composer submission through a fail-closed state machine. The
+/// callbacks keep the policy testable without a live AX session. A write needs
+/// a read that proves the composer is empty or holds this pipeline's own
+/// leftover draft, so an unreadable composer and a foreign draft are both left
+/// alone. Every write is re-read exactly before the submission, which
+/// `verify_submit_and_escalate_once` escalates at most once.
 #[allow(
     clippy::too_many_arguments,
     reason = "separate composer callbacks make every AX side effect and the mutation boundary independently testable"
@@ -992,7 +993,10 @@ where
         initial = read();
     }
     match initial.as_deref() {
-        Some("") | None => {}
+        Some("") => {}
+        None => anyhow::bail!(
+            "message composer in the selected window is unreadable; refusing to overwrite it"
+        ),
         Some(value) if composer_equivalent(value, message) => {
             // A prior accepted_unconfirmed local-send can leave the exact
             // outbound text sitting uncommitted. Re-apply that same value so
@@ -1042,15 +1046,15 @@ where
 
     // Re-attest both the window and the empty value immediately before the
     // first text mutation.  This catches a human draft started after the first
-    // inspection without replacing any of it.
+    // inspection without replacing any of it. An unreadable composer could
+    // hide that draft, so it does not pass as empty.
     attest("before composer write")?;
     match read().as_deref() {
-        Some("") | None => {}
-        Some(value)
-            if is_permitted_leftover(value, message) => {}
-        Some(value) if value == message => {
-            anyhow::bail!("message composer changed before write; refusing to overwrite it")
-        }
+        Some("") => {}
+        Some(value) if is_permitted_leftover(value, message) => {}
+        None => anyhow::bail!(
+            "message composer became unreadable before write; refusing to overwrite it"
+        ),
         Some(_) => anyhow::bail!("message composer changed before write; refusing to overwrite it"),
     }
 
@@ -1104,8 +1108,9 @@ where
 /// Read-only counterpart to `guarded_composer_send_once`. The first
 /// attestation binds the field inspection to the expected exact-title window;
 /// the second proves that the same unique window is still present after the
-/// inspection. Reading the field twice also fails closed if a human begins a
-/// draft during the probe. There are intentionally no focus, write, typing, or
+/// inspection. Both reads must return an empty composer, so an unreadable one
+/// fails the probe, and reading twice also fails closed if a human begins a
+/// draft during it. There are intentionally no focus, write, typing, or
 /// keyboard callbacks in this API.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn guarded_composer_preflight<Read, Attest>(
@@ -1118,13 +1123,17 @@ where
 {
     attest("before preflight composer inspection")?;
     match read().as_deref() {
-        Some("") | None => {}
+        Some("") => {}
+        None => anyhow::bail!("message composer is unreadable; preflight is unavailable"),
         Some(_) => anyhow::bail!("message composer is not empty; preflight is unavailable"),
     }
 
     attest("after preflight composer inspection")?;
     match read().as_deref() {
-        Some("") | None => {}
+        Some("") => {}
+        None => anyhow::bail!(
+            "message composer became unreadable during preflight; preflight is unavailable"
+        ),
         Some(_) => {
             anyhow::bail!("message composer changed during preflight; preflight is unavailable")
         }
@@ -1262,10 +1271,13 @@ mod match_tests {
         /// busy KakaoTalk does. Otherwise it is a silent no-op.
         first_submit_lands_late: bool,
         /// A human replaces the content with "human draft" right after the
-        /// first read that follows the first submission.
+        /// first read, or right after the first read that follows the first
+        /// submission.
+        human_draft_after_first_read: bool,
         human_draft_after_submit: bool,
         human_draft_unreadable: bool,
         delivered: Vec<String>,
+        mutation_begun: bool,
         submitted: bool,
         submit_pending: bool,
     }
@@ -1276,7 +1288,12 @@ mod match_tests {
             if std::mem::take(&mut self.submit_pending) {
                 self.deliver();
             }
-            if self.submitted && std::mem::take(&mut self.human_draft_after_submit) {
+            let human_draft_due = if self.submitted {
+                &mut self.human_draft_after_submit
+            } else {
+                &mut self.human_draft_after_first_read
+            };
+            if std::mem::take(human_draft_due) {
                 self.text = "human draft".to_string();
                 self.unreadable = self.human_draft_unreadable;
             }
@@ -1307,7 +1324,7 @@ mod match_tests {
             || composer.borrow_mut().read(),
             |_| Ok(()),
             || Ok(()),
-            || {},
+            || composer.borrow_mut().mutation_begun = true,
             || composer.borrow_mut().write("reply"),
             || Ok(()),
             || {
@@ -2434,16 +2451,42 @@ mod match_tests {
     }
 
     #[test]
-    fn composer_guard_treats_unreadable_value_as_empty_after_focus() {
-        let (result, probe) =
-            run_composer_probe(
-                [None, Some(""), None, Some("reply"), Some("reply"), Some("")],
-                true,
-            );
+    fn composer_guard_reads_again_after_focus_when_the_first_read_is_unreadable() {
+        let (result, probe) = run_composer_probe(
+            [
+                None,
+                Some(""),
+                Some(""),
+                Some("reply"),
+                Some("reply"),
+                Some(""),
+            ],
+            true,
+        );
         assert!(result.is_ok());
         assert_eq!(probe.focuses, 2);
         assert_eq!(probe.set_attempts, 1);
         assert_eq!(probe.returns, 1);
+    }
+
+    #[test]
+    fn composer_guard_never_writes_over_a_draft_it_cannot_read() {
+        let unreadable_from_the_start = FakeComposer {
+            text: "human draft".to_string(),
+            unreadable: true,
+            ..FakeComposer::default()
+        };
+        let unreadable_right_before_the_write = FakeComposer {
+            human_draft_after_first_read: true,
+            human_draft_unreadable: true,
+            ..FakeComposer::default()
+        };
+        for composer in [unreadable_from_the_start, unreadable_right_before_the_write] {
+            let (result, composer) = send_reply_through(composer);
+            assert_eq!(composer.text, "human draft");
+            assert!(!composer.mutation_begun);
+            assert!(result.is_err());
+        }
     }
 
     #[test]
@@ -2722,6 +2765,19 @@ mod match_tests {
         )
         .expect_err("a non-empty composer must fail closed");
         assert!(error.to_string().contains("not empty"));
+    }
+
+    #[test]
+    fn composer_preflight_rejects_an_unreadable_composer() {
+        guarded_composer_preflight(|| None, |_| Ok(()))
+            .expect_err("an unreadable composer is not proof of an empty one");
+
+        let mut reads = std::collections::VecDeque::from([Some(String::new()), None]);
+        guarded_composer_preflight(
+            || reads.pop_front().expect("two composer reads"),
+            |_| Ok(()),
+        )
+        .expect_err("a composer that turns unreadable during the probe must fail closed");
     }
 }
 
