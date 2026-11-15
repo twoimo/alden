@@ -16028,7 +16028,7 @@ print(json.dumps({
         self.assertIsNotNone(skipped)
         self.assertFalse(skipped["should_reply"])
 
-    def test_delivery_unknown_removes_bundle_and_scrubs_durable_event(self):
+    def test_delivery_unknown_scrubs_durable_event_and_leaves_bundle_to_sweep(self):
         module = self._load_auto_reply_module(
             "auto_reply_delivery_unknown_media_scrub_test"
         )
@@ -16062,13 +16062,15 @@ print(json.dumps({
                     connection.close()
                 durable = json.loads(row["event_json"])
                 self.assertEqual(row["status"], module.DELIVERY_UNKNOWN)
-                self.assertFalse(media["directory"].exists())
+                # release_media_event scrubs only the durable copy. The bundle
+                # stays until db-watch's orphan sweep (MEDIA_ORPHAN_TTL_SECONDS).
+                self.assertTrue(media["directory"].exists())
                 self.assertEqual(durable["image_path"], "")
                 self.assertEqual(durable["image_paths"], [])
                 self.assertEqual(durable["media_marker"], "")
                 self.assertIsNone(durable["media_manifest"])
 
-    def test_author_terminal_removes_bundle_and_scrubs_durable_event(self):
+    def test_author_terminal_scrubs_durable_event_and_leaves_bundle_to_sweep(self):
         module = self._load_auto_reply_module(
             "auto_reply_author_terminal_media_scrub_test"
         )
@@ -16093,8 +16095,8 @@ print(json.dumps({
                         ),
                         mock.patch.object(module, "complete_event"),
                     ):
-                        module.finish_author_identity_policy_skip(
-                            event, event["event_id"], connection, "not_allowlisted"
+                        module.finish_turn_policy_skip(
+                            event, event["event_id"], connection, "author_not_allowlisted"
                         )
                     row = connection.execute(
                         "SELECT status, event_json FROM reply_jobs WHERE event_id = ?",
@@ -16104,7 +16106,9 @@ print(json.dumps({
                     connection.close()
                 durable = json.loads(row["event_json"])
                 self.assertEqual(row["status"], "skipped")
-                self.assertFalse(media["directory"].exists())
+                # release_media_event scrubs only the durable copy. The bundle
+                # stays until db-watch's orphan sweep (MEDIA_ORPHAN_TTL_SECONDS).
+                self.assertTrue(media["directory"].exists())
                 self.assertEqual(durable["image_path"], "")
                 self.assertEqual(durable["image_paths"], [])
                 self.assertEqual(durable["media_marker"], "")
