@@ -50,3 +50,26 @@ pub fn cmd_ax_read(opts: AxReadOptions) -> Result<()> {
 
     Ok(())
 }
+
+pub fn cmd_ax_probe(chat: String, dump: bool, max_nodes: usize, json: bool) -> Result<()> {
+    if dump {
+        for line in ax_send::dump_ax(&chat, max_nodes)? {
+            println!("{line}");
+        }
+    } else {
+        let report = ax_send::probe_ax(&chat)?;
+        if json {
+            crate::util::output_json(&report)?;
+        } else {
+            println!(
+                "chat={:?} window_found={} composer_found={} elapsed_ms={} label={:?}",
+                report.chat_name,
+                report.window_found,
+                report.composer_found,
+                report.elapsed_ms,
+                report.label
+            );
+        }
+    }
+    Ok(())
+}

@@ -2,6 +2,8 @@ pub(crate) mod app_state;
 pub(crate) mod graph;
 pub(crate) mod hints;
 pub(crate) mod probe;
+#[cfg(test)]
+mod tests;
 
 // Re-export public API items used from main.rs, rest.rs, and tests.
 pub use app_state::*;

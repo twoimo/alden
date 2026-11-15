@@ -2,6 +2,7 @@ use std::path::Path;
 
 use anyhow::Result;
 
+use crate::config;
 use crate::error::OpenKakaoError;
 use crate::loco_helpers::{check_loco_status, loco_connect_with_auto_refresh};
 use crate::media::{detect_media_type, jpeg_dimensions, png_dimensions};
@@ -625,4 +626,38 @@ pub fn cmd_mark_read(opts: MarkReadOptions) -> Result<()> {
 
         Ok(())
     })
+}
+
+pub fn require_loco_write(config: &config::OpenKakaoConfig) -> Result<()> {
+    if !config.safety.allow_loco_write {
+        anyhow::bail!(
+            "LOCO write operations are disabled by default to protect your account.\n\
+             These operations (send, delete, edit, react) use the LOCO protocol which\n\
+             may result in account suspension or deletion by Kakao.\n\n\
+             To enable, add to ~/.config/openkakao/config.toml:\n\n\
+             [safety]\n\
+             allow_loco_write = true\n\n\
+             Consider using local-read / local-chats / local-search for safe read-only access."
+        );
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn loco_write_disabled_by_default() {
+        let config = crate::config::OpenKakaoConfig::default();
+        assert!(!config.safety.allow_loco_write);
+        assert!(require_loco_write(&config).is_err());
+    }
+
+    #[test]
+    fn loco_write_enabled_when_configured() {
+        let mut config = crate::config::OpenKakaoConfig::default();
+        config.safety.allow_loco_write = true;
+        assert!(require_loco_write(&config).is_ok());
+    }
 }

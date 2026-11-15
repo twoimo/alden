@@ -1355,4 +1355,80 @@ mod tests {
         assert!(!watch_hook_matches(&config, &event));
         assert!(dispatch_watch_sinks(&config, &event).await.is_ok());
     }
+
+    #[test]
+    fn watch_hook_filters_match_expected_events() {
+        let config = WatchHookConfig {
+            command: Some("cat".to_string()),
+            webhook_url: None,
+            webhook_headers: Vec::new(),
+            webhook_signing_secret: None,
+            webhook_format: WebhookFormat::Raw,
+            chat_ids: vec![42],
+            chat_names: vec![],
+            keywords: vec!["urgent".to_string()],
+            message_types: vec![1],
+            fail_fast: false,
+            min_hook_interval_secs: 2,
+            min_webhook_interval_secs: 2,
+            hook_timeout_secs: 20,
+            webhook_timeout_secs: 10,
+        };
+        let event = WatchMessageEvent {
+            event_type: "message",
+            received_at: "2026-03-08T00:00:00Z".to_string(),
+            method: "MSG".to_string(),
+            chat_id: 42,
+            chat_name: "test".to_string(),
+            log_id: 7,
+            author_id: 9,
+            author_nickname: "alice".to_string(),
+            message_type: 1,
+            message: "urgent: ping me".to_string(),
+            attachment: String::new(),
+            unread: 0,
+        };
+
+        assert!(watch_hook_matches(&config, &event));
+
+        let wrong_chat = WatchMessageEvent {
+            chat_id: 99,
+            ..event.clone()
+        };
+        assert!(!watch_hook_matches(&config, &wrong_chat));
+
+        let wrong_keyword = WatchMessageEvent {
+            message: "casual update".to_string(),
+            ..event.clone()
+        };
+        assert!(!watch_hook_matches(&config, &wrong_keyword));
+    }
+
+    #[test]
+    fn webhook_header_requires_name_and_value() {
+        assert_eq!(
+            parse_webhook_header("Authorization: Bearer test").unwrap(),
+            ("Authorization".to_string(), "Bearer test".to_string())
+        );
+        assert!(parse_webhook_header("MissingSeparator").is_err());
+        assert!(parse_webhook_header("Header: ").is_err());
+    }
+
+    #[test]
+    fn webhook_signature_is_stable_for_known_input() {
+        let signature = build_webhook_signature("secret", "1700000000", br#"{"ok":true}"#).unwrap();
+        assert_eq!(
+            signature,
+            "sha256=c1afc7c2df3db0690d7d75954610ed1a1d959ce96355ccb8c0a8bc09fd0cfc27"
+        );
+    }
+
+    #[test]
+    fn webhook_url_requires_https_or_loopback_http() {
+        assert!(validate_webhook_url("https://example.com/hook", false).is_ok());
+        assert!(validate_webhook_url("http://localhost:3000/hook", false).is_ok());
+        assert!(validate_webhook_url("http://127.0.0.1:4000/hook", false).is_ok());
+        assert!(validate_webhook_url("http://example.com/hook", false).is_err());
+        assert!(validate_webhook_url("http://example.com/hook", true).is_ok());
+    }
 }
