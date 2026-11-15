@@ -605,6 +605,13 @@ pub enum IdentityCacheMode {
     NoMutation,
 }
 
+fn platform_uuid(mode: IdentityCacheMode) -> Result<String> {
+    match mode {
+        IdentityCacheMode::Normal => get_platform_uuid(),
+        IdentityCacheMode::NoMutation => get_platform_uuid_without_process(),
+    }
+}
+
 fn local_db_identity_cache_path() -> Option<PathBuf> {
     dirs::data_local_dir().map(|dir| dir.join("openkakao").join("local-db-identity.json"))
 }
@@ -627,7 +634,10 @@ fn user_id_matches_account_hash(user_id: i64, account_hash: &str) -> bool {
     user_id > 0 && sha512_hex(user_id.to_string().as_bytes()) == account_hash
 }
 
-fn read_cached_user_id(path: &Path, uuid: &str, account_hash: &str) -> Option<i64> {
+/// Reads the owner-only identity cache entry recorded for this machine. With
+/// a known account hash the entry must name that account and its user id must
+/// hash to it; without one, any positive cached id is returned.
+fn read_cached_user_id(path: &Path, uuid: &str, account_hash: Option<&str>) -> Option<i64> {
     let metadata = std::fs::symlink_metadata(path).ok()?;
     if !metadata.file_type().is_file() {
         return None;
@@ -643,38 +653,18 @@ fn read_cached_user_id(path: &Path, uuid: &str, account_hash: &str) -> Option<i6
         serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()?;
     let matches = value.get("schema_version") == Some(&serde_json::Value::from(3))
         && value.get("uuid").and_then(|value| value.as_str()) == Some(uuid)
-        && value.get("account_hash").and_then(|value| value.as_str()) == Some(account_hash);
+        && account_hash.is_none_or(|hash| {
+            value.get("account_hash").and_then(|value| value.as_str()) == Some(hash)
+        });
     if !matches {
         return None;
     }
-    value
-        .get("user_id")
-        .and_then(|value| value.as_i64())
-        .filter(|id| user_id_matches_account_hash(*id, account_hash))
-}
-fn read_cached_user_id_for_uuid(path: &Path, uuid: &str) -> Option<i64> {
-    let metadata = std::fs::symlink_metadata(path).ok()?;
-    if !metadata.file_type().is_file() {
-        return None;
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        if metadata.uid() != unsafe { libc::geteuid() } || metadata.mode() & 0o077 != 0 {
-            return None;
-        }
-    }
-    let value: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()?;
-    let matches = value.get("schema_version") == Some(&serde_json::Value::from(3))
-        && value.get("uuid").and_then(|value| value.as_str()) == Some(uuid);
-    if !matches {
-        return None;
-    }
-    value
-        .get("user_id")
-        .and_then(|value| value.as_i64())
-        .filter(|id| *id > 0)
+    let user_id = value.get("user_id").and_then(|value| value.as_i64())?;
+    let trusted = match account_hash {
+        Some(hash) => user_id_matches_account_hash(user_id, hash),
+        None => user_id > 0,
+    };
+    trusted.then_some(user_id)
 }
 
 fn cache_user_id(uuid: &str, account_hash: &str, user_id: i64) {
@@ -712,11 +702,7 @@ fn get_user_id_from_plist() -> Result<i64> {
 
 fn get_user_id_from_plist_with_mode(mode: IdentityCacheMode) -> Result<i64> {
     let home = dirs::home_dir().context("No home directory")?;
-    let current_uuid = if mode == IdentityCacheMode::NoMutation {
-        get_platform_uuid_without_process().ok()
-    } else {
-        get_platform_uuid().ok()
-    };
+    let current_uuid = platform_uuid(mode).ok();
     let container_prefs =
         home.join("Library/Containers/com.kakao.KakaoTalkMac/Data/Library/Preferences");
 
@@ -757,37 +743,17 @@ fn get_user_id_from_plist_with_mode(mode: IdentityCacheMode) -> Result<i64> {
         let dictionary: plist::Dictionary = plist::from_file(path).ok()?;
         extract_active_account_hash(&dictionary)
     });
-    if let (Some(uuid), Some(account_hash)) =
-        (current_uuid.as_deref(), active_account_hash.as_deref())
-    {
+    // With a known account hash the cache must match it, so a stale entry for
+    // another account on this machine never selects that account's database.
+    // Without one (a freshly rebooted KakaoTalk may not have written its
+    // friends-revision key yet), the UUID-only entry is trusted when its
+    // derived database exists.
+    if let Some(uuid) = current_uuid.as_deref() {
         if let Some(user_id) = local_db_identity_cache_path()
-            .and_then(|path| read_cached_user_id(&path, uuid, account_hash))
+            .and_then(|path| read_cached_user_id(&path, uuid, active_account_hash.as_deref()))
         {
-            let db_name = derive_database_name(user_id, uuid);
-            if find_database_path(&db_name).is_ok() {
+            if find_database_path(&derive_database_name(user_id, uuid)).is_ok() {
                 return Ok(user_id);
-            }
-        }
-    }
-
-    // Last-resort fallback: trust the uid-0600 identity cache when it matches
-    // this machine's platform UUID and the derived database actually exists.
-    // A freshly rebooted KakaoTalk may not have written its friends-revision
-    // key yet, which leaves the account hash unresolvable from plists.
-    //
-    // This UUID-only lookup ignores the account hash, so it is allowed only
-    // when the current account hash could not be read. If the hash is known
-    // and a different account is signed in, a stale cache for another account
-    // on the same machine must be rejected instead of selecting its database.
-    if active_account_hash.is_none() {
-        if let Some(uuid) = current_uuid.as_deref() {
-            if let Some(user_id) = local_db_identity_cache_path()
-                .and_then(|path| read_cached_user_id_for_uuid(&path, uuid))
-            {
-                let db_name = derive_database_name(user_id, uuid);
-                if find_database_path(&db_name).is_ok() {
-                    return Ok(user_id);
-                }
             }
         }
     }
@@ -1154,11 +1120,14 @@ fn pbkdf2_sha256(password: &[u8], salt: &[u8], iterations: u32, key_len: usize) 
 // Database path resolution
 // ---------------------------------------------------------------------------
 
+/// The KakaoTalk sandbox directory, relative to the home directory, that holds
+/// the encrypted database.
+const KAKAO_DATABASE_DIR: &str =
+    "Library/Containers/com.kakao.KakaoTalkMac/Data/Library/Application Support/com.kakao.KakaoTalkMac";
+
 fn find_database_path(db_name: &str) -> Result<PathBuf> {
     let home = dirs::home_dir().context("No home directory")?;
-    let container_dir = home.join(
-        "Library/Containers/com.kakao.KakaoTalkMac/Data/Library/Application Support/com.kakao.KakaoTalkMac",
-    );
+    let container_dir = home.join(KAKAO_DATABASE_DIR);
 
     let container_metadata = std::fs::symlink_metadata(&container_dir)?;
     if !container_metadata.is_dir() {
@@ -1517,12 +1486,7 @@ impl LocalDbReader {
     }
 
     fn open_with_cache_mode(mode: IdentityCacheMode) -> Result<Self> {
-        let uuid = if mode == IdentityCacheMode::NoMutation {
-            get_platform_uuid_without_process()
-        } else {
-            get_platform_uuid()
-        }
-        .context("Failed to get IOPlatformUUID")?;
+        let uuid = platform_uuid(mode).context("Failed to get IOPlatformUUID")?;
         let user_id =
             get_user_id_from_plist_with_mode(mode).context("Failed to get KakaoTalk user ID")?;
 
@@ -1573,9 +1537,7 @@ impl LocalDbReader {
     /// Check if the local database is accessible (for doctor command).
     pub fn check_access() -> Result<LocalDbStatus> {
         let home = dirs::home_dir().context("No home directory")?;
-        let container_dir = home.join(
-            "Library/Containers/com.kakao.KakaoTalkMac/Data/Library/Application Support/com.kakao.KakaoTalkMac",
-        );
+        let container_dir = home.join(KAKAO_DATABASE_DIR);
 
         // Resolve both identities exactly once. Each lookup spawns
         // `/usr/sbin/ioreg` and parses the KakaoTalk preferences plist, so the
@@ -3323,15 +3285,6 @@ mod tests {
         let _ = mode;
     }
 
-    /// Reads the cache the way get_user_id_from_plist_with_mode does: bound to
-    /// the active account hash when one is known, UUID-only otherwise.
-    fn cached_user_id(path: &Path, uuid: &str, account_hash: Option<&str>) -> Option<i64> {
-        match account_hash {
-            Some(hash) => read_cached_user_id(path, uuid, hash),
-            None => read_cached_user_id_for_uuid(path, uuid),
-        }
-    }
-
     #[test]
     fn identity_cache_is_trusted_only_for_this_machine_and_account() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -3348,8 +3301,8 @@ mod tests {
         };
         let both = |path: &Path, uuid: &str| {
             (
-                cached_user_id(path, uuid, Some(&hash)),
-                cached_user_id(path, uuid, None),
+                read_cached_user_id(path, uuid, Some(&hash)),
+                read_cached_user_id(path, uuid, None),
             )
         };
 
@@ -3357,7 +3310,10 @@ mod tests {
 
         write_identity_cache(&path, &entry("device-a", 12345, 3), 0o600);
         assert_eq!(both(&path, "device-a"), (Some(12345), Some(12345)));
-        assert_eq!(cached_user_id(&path, "device-a", Some(&other_hash)), None);
+        assert_eq!(
+            read_cached_user_id(&path, "device-a", Some(&other_hash)),
+            None
+        );
         assert_eq!(both(&path, "device-b"), (None, None), "another machine");
 
         // An id that does not hash to the account is rejected once the account
