@@ -560,7 +560,6 @@ RESPONSE_TIME_CAPTION_REASONS = frozenset(
         "image_caption",
     }
 )
-REPLY_MEMORY_LIMIT = 6
 NON_HUMAN_AUTHORS = {
     "드리고",
     "드리고봇",
@@ -779,20 +778,6 @@ def reply_authors() -> set[str]:
 
 def is_context_only_author(value: object) -> bool:
     return str(value or "").strip() in CONTEXT_ONLY_AUTHORS
-
-
-def is_reply_author(value: object) -> bool:
-    author = str(value or "").strip()
-    allowed = reply_authors()
-    return (
-        bool(author)
-        and bool(allowed)
-        and author.lower() != "missing value"
-        and author not in NON_HUMAN_AUTHORS
-        and not author.endswith("봇")
-        and not is_context_only_author(author)
-        and author in allowed
-    )
 
 
 def load_state() -> dict:
@@ -4174,41 +4159,6 @@ def _singleton_burst_event(event: dict) -> dict:
     prepared["burst_message_count"] = 1 if log_id is not None else 0
     prepared["burst_policy_version"] = BURST_POLICY_VERSION
     return prepared
-
-
-def _immediate_burst_predecessor(event: dict) -> str | None:
-    rows = _verified_burst_rows(event)
-    if len(rows) < 2:
-        return None
-    predecessor = rows[-2]
-    current = rows[-1]
-    # Media cannot be safely transferred from one canonical queue job to
-    # another, so it is an explicit burst boundary.
-    if predecessor["attachment"]:
-        return None
-    chat_id = _fence_int(event.get("chat_id"))
-    if chat_id is None:
-        return None
-    return f"db:{chat_id}:{predecessor['log_id']}"
-
-
-def _predecessor_event_matches(predecessor: object, successor: dict) -> bool:
-    if not isinstance(predecessor, dict):
-        return False
-    successor_rows = _verified_burst_rows(successor)
-    if len(successor_rows) < 2:
-        return False
-    expected = successor_rows[-2]
-    actual = _burst_row(predecessor, current_event=True)
-    expected_event_id = f"db:{expected['chat_id']}:{expected['log_id']}"
-    return bool(
-        actual == expected
-        and predecessor.get("event_id") == expected_event_id
-        and predecessor.get("canonical_event_id") == expected_event_id
-        and predecessor.get("chat_id") == successor.get("chat_id")
-        and predecessor.get("owner_id") == successor.get("owner_id")
-        and predecessor.get("source_epoch") == successor.get("source_epoch")
-    )
 
 
 def _verified_burst_rows(event: dict) -> list[dict]:
@@ -12386,6 +12336,28 @@ def generate_reply(
         for path in normalized_image_paths:
             command.append(f"@{path}")
         model_stdin_bytes = gjc_stdin_prefix + prompt_bytes
+
+    def run_fallback_candidate(candidate: str) -> tuple[int, bytes, bytes]:
+        return _run_generation_candidate(
+            candidate,
+            system_prompt,
+            prompt_bytes,
+            command=command,
+            env=env,
+            model_stdin_bytes=model_stdin_bytes,
+            image_paths=normalized_image_paths,
+            timeout=_model_generation_timeout(candidate, deadline=generation_deadline),
+        )
+
+    def fallback_winner() -> dict | None:
+        """Ask the fallback chain for an answer in place of the failing model."""
+        return _model_fallback_chain(
+            active_model,
+            run_fallback_candidate,
+            deadline=generation_deadline,
+            turn_guard=turn_hold,
+        )
+
     held = turn_hold()
     if held:
         return held
@@ -12412,40 +12384,7 @@ def generate_reply(
         failure_class = str(slot["failure_class"])
         retry_at = float(slot["retry_at"])
         if not _capacity_probe and failure_class not in {"call_in_flight", "circuit_state_invalid"}:
-            if REPLY_RUNNER_KIND == "opencodex":
-                winner = _model_fallback_chain(
-                    active_model,
-                    lambda candidate: _run_generation_candidate(
-                        candidate,
-                        system_prompt,
-                        prompt_bytes,
-                        command=command,
-                        env=env,
-                        model_stdin_bytes=model_stdin_bytes,
-                        image_paths=normalized_image_paths,
-                        timeout=_model_generation_timeout(
-                            candidate, deadline=generation_deadline
-                        ),
-                    ),
-                    deadline=generation_deadline,
-                    turn_guard=turn_hold,
-                )
-            else:
-                winner = _model_fallback_chain(
-                    active_model,
-                    lambda candidate: _run_generation_candidate(
-                        candidate,
-                        system_prompt,
-                        prompt_bytes,
-                        command=command,
-                        env=env,
-                        model_stdin_bytes=model_stdin_bytes,
-                        image_paths=normalized_image_paths,
-                        timeout=_model_generation_timeout(candidate, deadline=generation_deadline),
-                    ),
-                    deadline=generation_deadline,
-                    turn_guard=turn_hold,
-                )
+            winner = fallback_winner()
             if winner is not None:
                 slot = {
                     "allowed": True,
@@ -12522,6 +12461,30 @@ def generate_reply(
             )
         )
 
+    def continue_on_fallback(
+        winner: dict,
+        label: str,
+        failed_class: str,
+        failed_retry_after: float | None = None,
+    ) -> None:
+        """Close the failed attempt, then run the rest of the turn on the winner's lease."""
+        nonlocal lease_token, lease_retry_at, returncode, stdout_bytes, stderr_bytes, active_model
+        _close_model_lease(
+            lease_token, active_model, failed_class,
+            retry_after_seconds=failed_retry_after,
+        )
+        lease_token = winner["lease_token"]
+        lease_retry_at = winner["retry_at"]
+        returncode = winner["returncode"]
+        stdout_bytes = winner["stdout"]
+        stderr_bytes = winner["stderr"]
+        active_model = winner["model"]
+        print(
+            f"[reply-gen] {label} answered on {active_model}",
+            file=sys.stderr,
+            flush=True,
+        )
+
     try:
         if not cooldown_fallback_answered and generation_deadline <= time.monotonic():
             return fail_model_call("runner_timeout")
@@ -12550,44 +12513,14 @@ def generate_reply(
                     or "quota" in err_str
                     or failure_class in MODEL_CIRCUIT_FAILURE_CLASSES
                 ):
-                    winner = _model_fallback_chain(
-                        active_model,
-                        lambda candidate: _run_generation_candidate(
-                            candidate,
-                            system_prompt,
-                            prompt_bytes,
-                            command=command,
-                            env=env,
-                            model_stdin_bytes=model_stdin_bytes,
-                            image_paths=normalized_image_paths,
-                            timeout=_model_generation_timeout(candidate, deadline=generation_deadline),
-                        ),
-                        deadline=generation_deadline,
-                        turn_guard=turn_hold,
-                    )
+                    winner = fallback_winner()
                     if winner is not None:
-                        # The fallback answered. Close the first attempt, then run
-                        # the rest of the turn on the lease that generated it.
                         first_class, first_retry = _classify_model_failure(
                             returncode,
                             stdout_bytes,
                             stderr_bytes,
                         )
-                        _close_model_lease(
-                            lease_token, active_model, first_class,
-                            retry_after_seconds=first_retry,
-                        )
-                        lease_token = winner["lease_token"]
-                        lease_retry_at = winner["retry_at"]
-                        returncode = winner["returncode"]
-                        stdout_bytes = winner["stdout"]
-                        stderr_bytes = winner["stderr"]
-                        active_model = winner["model"]
-                        print(
-                            f"[reply-gen] fallback answered on {active_model}",
-                            file=sys.stderr,
-                            flush=True,
-                        )
+                        continue_on_fallback(winner, "fallback", first_class, first_retry)
         else:
             # 같은 이유로 기본 실행기도 건너뛴다. 쿨다운 폴백이 이미 답한
             # 턴에서 주 모델을 다시 부르면 성공한 답이 버려지고 토큰이 두 번
@@ -12629,43 +12562,12 @@ def generate_reply(
         # ever consulted, so a slow provider defeated the whole point of having
         # fallbacks. Give the chain one bounded chance first (2026-09-15).
         if REPLY_RUNNER_KIND != "opencodex":
-            def _run_timeout_candidate(
-                candidate: str,
-                _command: list[str] = command,
-            ) -> tuple:
-                return _run_generation_candidate(
-                    candidate,
-                    system_prompt,
-                    prompt_bytes,
-                    command=_command,
-                    env=env,
-                    model_stdin_bytes=model_stdin_bytes,
-                    image_paths=normalized_image_paths,
-                    timeout=_model_generation_timeout(candidate, deadline=generation_deadline),
-                )
-
             try:
-                winner = _model_fallback_chain(
-                    active_model,
-                    _run_timeout_candidate,
-                    deadline=generation_deadline,
-                    turn_guard=turn_hold,
-                )
+                winner = fallback_winner()
             except Exception:
                 winner = None
             if winner is not None:
-                _close_model_lease(lease_token, active_model, "runner_timeout")
-                lease_token = winner["lease_token"]
-                lease_retry_at = winner["retry_at"]
-                returncode = winner["returncode"]
-                stdout_bytes = winner["stdout"]
-                stderr_bytes = winner["stderr"]
-                active_model = winner["model"]
-                print(
-                    f"[reply-gen] timeout_fallback answered on {active_model}",
-                    file=sys.stderr,
-                    flush=True,
-                )
+                continue_on_fallback(winner, "timeout_fallback", "runner_timeout")
             else:
                 return fail_model_call("runner_timeout")
         else:
@@ -12696,46 +12598,15 @@ def generate_reply(
             m in err_msg for m in ("usage limit", "weekly limit", "daily limit", "429", "timed out", "unauthorized", "missing api key")
         )
         if is_opencode and is_limit and REPLY_RUNNER_KIND != "opencodex":
-            def _run_candidate(candidate: str, _command: list[str] = command) -> tuple:
-                return _run_generation_candidate(
-                    candidate,
-                    system_prompt,
-                    prompt_bytes,
-                    command=_command,
-                    env=env,
-                    model_stdin_bytes=model_stdin_bytes,
-                    image_paths=normalized_image_paths,
-                    timeout=_model_generation_timeout(candidate, deadline=generation_deadline),
-                )
-
-            winner = _model_fallback_chain(
-                active_model,
-                _run_candidate,
-                deadline=generation_deadline,
-                turn_guard=turn_hold,
-            )
+            winner = fallback_winner()
             if winner is not None:
-                # The fallback answered. Close the first attempt, then run the
-                # rest of the turn on the lease that generated it.
                 first_class, first_retry = _classify_model_failure(
                     returncode,
                     stdout_bytes,
                     stderr_bytes,
                 )
-                _close_model_lease(
-                    lease_token, active_model, first_class,
-                    retry_after_seconds=first_retry,
-                )
-                lease_token = winner["lease_token"]
-                lease_retry_at = winner["retry_at"]
-                returncode = winner["returncode"]
-                stdout_bytes = winner["stdout"]
-                stderr_bytes = winner["stderr"]
-                active_model = winner["model"]
-                print(
-                    f"[reply-gen] opencode_go_quota_fallback answered on {active_model}",
-                    file=sys.stderr,
-                    flush=True,
+                continue_on_fallback(
+                    winner, "opencode_go_quota_fallback", first_class, first_retry
                 )
 
     held = turn_hold()
@@ -13294,10 +13165,6 @@ def model_capacity_probe_cli(arguments: list[str]) -> int:
     return 0 if outcome.get("capacity_available") is True else 2
 
 
-MEDIA_DIR_PREFIX = "auto-reply-db-media-"
-MEDIA_ACTIVE_MARKER = ".auto-reply-inflight"
-
-
 def cleanup_media_path(path: Path | None, marker: Path | None = None) -> None:
     """Remove only a producer-owned temporary media file after terminal processing."""
     if path is None:
@@ -13520,68 +13387,12 @@ def _log_pre_send_block(
     )
 
 
-def send_reply(
-    reply: str,
-    *,
-    event: dict | None = None,
-    event_id: str = "",
-    connection: sqlite3.Connection | None = None,
-    expected_target_chat_id: int | None = None,
-    expected_owner: str | None = None,
-    expected_epoch: int | None = None,
-    hold_out: list[str] | None = None,
-) -> bool:
-    # This is the final automatic-outbound boundary. Revalidate here so a
-    # pre-policy or externally corrupted scheduled row can never bypass the
-    # model-output parser and reach local-send.
-    inbound = str((event or {}).get("message") or "")
-    recorded_laughter = (event or {}).get("laughter_allowed")
-    recorded_awe = (event or {}).get("awe_allowed")
-    if not _outbound_reaction_allows(
-        reply,
-        inbound,
-        laughter_allowed=recorded_laughter if isinstance(recorded_laughter, bool) else None,
-        awe_allowed=recorded_awe if isinstance(recorded_awe, bool) else None,
-    ) or not _outbound_question_allows(reply, inbound):
-        return False
-    if (event or {}).get("proactive") is not True and not _outbound_register_allows(
-        reply, recipient=_event_author_nickname(event or {})
-    ):
-        return False
-    if os.environ.get("OPENKAKAO_HOOK_DRY_RUN") == "1":
-        return True
-    if event is None or numeric_author_identity_status(event) != "allowed":
-        return False
-    if _WORKER_HEALTH is not None and not _WORKER_HEALTH.local_ready():
-        return False
-    if not BIN.exists():
-        return False
-    ready, initial_token = send_readiness_fence(
-        expected_target_chat_id=expected_target_chat_id,
-        expected_owner=expected_owner,
-        expected_epoch=expected_epoch,
-    )
-    if not ready:
-        return False
-    if (
-        event is not None
-        and event.get("proactive") is not True
-        and conversation_advanced_past_event(event) is None
-    ):
-        return False
-    command = [
-        str(BIN),
-        "local-send",
-        CHAT,
-        reply,
-        "--yes",
-        "--json",
-        "--no-prefix",
-    ]
-    inbound_quote = _inbound_reply_to_text(event)
-    if inbound_quote:
-        command.extend(["--reply-to", inbound_quote])
-    composer_allowlist_path = Path(str(QUEUE)).parent / "composer-allowlist.json"
+def _allow_composer_draft(composer_allowlist_path: Path, reply: str) -> None:
+    """Tell the CLI that `reply` may already be typed in the composer.
+
+    The file keeps the eight most recent drafts, newest first, so a draft a
+    crashed send left behind is recognized as the worker's own text.
+    """
     allowed: list[str] = [reply]
     try:
         previous = json.loads(composer_allowlist_path.read_text(encoding="utf-8"))
@@ -13599,17 +13410,19 @@ def send_reply(
         )
     except OSError:
         pass
-    preflight_command = [
-        str(BIN),
-        "local-send",
-        CHAT,
-        "openkakao-read-only-preflight",
-        "--yes",
-        "--json",
-        "--no-prefix",
-        "--preflight",
-    ]
-    worker_environment = {
+
+
+def _local_send_environment(
+    event: dict | None,
+    expected_target_chat_id: int | None,
+    composer_allowlist_path: Path,
+) -> dict[str, str]:
+    """Build the whole environment of the CLI that checks and then sends.
+
+    The CLI inherits nothing else. It refuses to send unless the room, the
+    owner, the epoch, and the inbound row it is answering match what it sees.
+    """
+    return {
         "HOME": str(Path.home()),
         "PATH": "/usr/bin:/bin:/opt/homebrew/bin",
         # The operator's attestation exception must reach the CLI this worker
@@ -13673,7 +13486,30 @@ def send_reply(
         ),
         "OPENKAKAO_COMPOSER_ALLOWLIST": str(composer_allowlist_path),
     }
-    preflight = None
+
+
+def _send_preflight_ready(
+    worker_environment: dict[str, str],
+    *,
+    event: dict | None,
+    event_id: str,
+    connection: sqlite3.Connection | None,
+    hold_out: list[str] | None,
+) -> bool:
+    """Run the read-only send preflight, with retries, and say whether the send may start.
+
+    A room outside the send allowlist is reported through ``hold_out``.
+    """
+    preflight_command = [
+        str(BIN),
+        "local-send",
+        CHAT,
+        "openkakao-read-only-preflight",
+        "--yes",
+        "--json",
+        "--no-prefix",
+        "--preflight",
+    ]
     preflight_returncode: object = None
     preflight_candidate: object = None
     preflight_stderr: object = None
@@ -13705,8 +13541,7 @@ def send_reply(
             and candidate.get("will_send") is False
             and candidate.get("network") is False
         ):
-            preflight = candidate
-            break
+            return True
         if (
             returncode == 0
             and isinstance(candidate, dict)
@@ -13724,13 +13559,7 @@ def send_reply(
                 # Exact outbound text may still be sitting unsent. The send
                 # path reapplies that same draft and clicks 전송; a foreign
                 # draft still fails closed without mutation.
-                preflight = {
-                    "status": "preflight_ready",
-                    "preflight_ready": True,
-                    "will_send": False,
-                    "network": False,
-                }
-                break
+                return True
             if event is not None:
                 event["_composer_occupied"] = True
             _log_pre_send_block(
@@ -13742,28 +13571,103 @@ def send_reply(
         preflight_stderr = stderr_bytes
         if attempt + 1 < PRE_SEND_PREFLIGHT_ATTEMPTS:
             time.sleep(PRE_SEND_PREFLIGHT_RETRY_SECONDS)
-    if preflight is None:
-        detail_text = ""
-        if isinstance(preflight_stderr, (bytes, bytearray)):
-            detail_text = bytes(preflight_stderr).decode("utf-8", "replace")
-        elif isinstance(preflight_stderr, str):
-            detail_text = preflight_stderr
-        if SEND_PREFLIGHT_ALLOWLIST_MARKER in detail_text:
-            _log_pre_send_block(
-                "send_allowlist_rejected",
-                preflight_returncode,
-                preflight_candidate,
-                preflight_stderr,
-            )
-            if hold_out is not None:
-                hold_out.append("send_allowlist_rejected")
-            return False
+    detail_text = ""
+    if isinstance(preflight_stderr, (bytes, bytearray)):
+        detail_text = bytes(preflight_stderr).decode("utf-8", "replace")
+    elif isinstance(preflight_stderr, str):
+        detail_text = preflight_stderr
+    if SEND_PREFLIGHT_ALLOWLIST_MARKER in detail_text:
         _log_pre_send_block(
-            "preflight_unavailable",
+            "send_allowlist_rejected",
             preflight_returncode,
             preflight_candidate,
             preflight_stderr,
         )
+        if hold_out is not None:
+            hold_out.append("send_allowlist_rejected")
+        return False
+    _log_pre_send_block(
+        "preflight_unavailable",
+        preflight_returncode,
+        preflight_candidate,
+        preflight_stderr,
+    )
+    return False
+
+
+def send_reply(
+    reply: str,
+    *,
+    event: dict | None = None,
+    event_id: str = "",
+    connection: sqlite3.Connection | None = None,
+    expected_target_chat_id: int | None = None,
+    expected_owner: str | None = None,
+    expected_epoch: int | None = None,
+    hold_out: list[str] | None = None,
+) -> bool:
+    # This is the final automatic-outbound boundary. Revalidate here so a
+    # pre-policy or externally corrupted scheduled row can never bypass the
+    # model-output parser and reach local-send.
+    inbound = str((event or {}).get("message") or "")
+    recorded_laughter = (event or {}).get("laughter_allowed")
+    recorded_awe = (event or {}).get("awe_allowed")
+    if not _outbound_reaction_allows(
+        reply,
+        inbound,
+        laughter_allowed=recorded_laughter if isinstance(recorded_laughter, bool) else None,
+        awe_allowed=recorded_awe if isinstance(recorded_awe, bool) else None,
+    ) or not _outbound_question_allows(reply, inbound):
+        return False
+    if (event or {}).get("proactive") is not True and not _outbound_register_allows(
+        reply, recipient=_event_author_nickname(event or {})
+    ):
+        return False
+    if os.environ.get("OPENKAKAO_HOOK_DRY_RUN") == "1":
+        return True
+    if event is None or numeric_author_identity_status(event) != "allowed":
+        return False
+    if _WORKER_HEALTH is not None and not _WORKER_HEALTH.local_ready():
+        return False
+    if not BIN.exists():
+        return False
+    ready, initial_token = send_readiness_fence(
+        expected_target_chat_id=expected_target_chat_id,
+        expected_owner=expected_owner,
+        expected_epoch=expected_epoch,
+    )
+    if not ready:
+        return False
+    if (
+        event is not None
+        and event.get("proactive") is not True
+        and conversation_advanced_past_event(event) is None
+    ):
+        return False
+    command = [
+        str(BIN),
+        "local-send",
+        CHAT,
+        reply,
+        "--yes",
+        "--json",
+        "--no-prefix",
+    ]
+    inbound_quote = _inbound_reply_to_text(event)
+    if inbound_quote:
+        command.extend(["--reply-to", inbound_quote])
+    composer_allowlist_path = Path(str(QUEUE)).parent / "composer-allowlist.json"
+    _allow_composer_draft(composer_allowlist_path, reply)
+    worker_environment = _local_send_environment(
+        event, expected_target_chat_id, composer_allowlist_path
+    )
+    if not _send_preflight_ready(
+        worker_environment,
+        event=event,
+        event_id=event_id,
+        connection=connection,
+        hold_out=hold_out,
+    ):
         return False
     ready, _ = send_readiness_fence(
         expected_target_chat_id=expected_target_chat_id,
@@ -13836,14 +13740,12 @@ def send_reply(
     if not isinstance(result, dict):
         return False
     expected_source_log_id = _proactive_expected_source_log_id(event or {})
-    confirmation_log_id = result.get("confirmation_log_id") if isinstance(result, dict) else None
+    confirmation_log_id = result.get("confirmation_log_id")
     if (
         returncode == 0
-        and isinstance(result, dict)
         and result.get("status") == "accepted_unconfirmed"
         and result.get("confirmed") is False
         and event_id
-        and str(event.get("message") if isinstance(event, dict) else "") is not None
     ):
         inbound = None
         if isinstance(event, dict):
@@ -13867,7 +13769,6 @@ def send_reply(
             confirmation_log_id = confirmed
     if (
         returncode == 0
-        and isinstance(result, dict)
         and set(result) == {
             "chat_name",
             "status",
@@ -13893,7 +13794,6 @@ def send_reply(
         return False
     if (
         returncode != 0
-        or not isinstance(result, dict)
         or result.get("status") != "confirmed_local_db"
         or result.get("confirmed") is not True
         or result.get("network") is not False
@@ -14873,6 +14773,57 @@ def durable_policy_skip(
     return record_or_confirm_context_skip(record)
 
 
+def finish_proven_skip(
+    event: dict,
+    event_id: str,
+    connection: sqlite3.Connection | None,
+    reason: str,
+    *,
+    category: str = "policy",
+    audited_event: dict | None = None,
+    rewrite_event: bool = False,
+    unknown_fields: dict[str, object] | None = None,
+    **queue_fields: object,
+) -> bool:
+    """Close a job that sent nothing: the audit, then the queue row, then the event.
+
+    The decision-store audit is the proof that nothing was sent, so it is
+    written first. A job whose audit is not durable is not a skip. It is fenced
+    as delivery_unknown with ``unknown_fields``, which default to projecting the
+    skip onto that row.
+
+    ``audited_event`` is what the audit describes when that is not ``event``.
+    ``rewrite_event`` stores ``event`` on the queue row. ``queue_fields`` are
+    the remaining columns of the skipped row.
+    """
+    if not durable_policy_skip(
+        event if audited_event is None else audited_event,
+        event_id,
+        reason,
+        category=category,
+    ):
+        if unknown_fields is None:
+            unknown_fields = {"decision": "skip", "reason": reason, "category": category}
+        finish_delivery_unknown(event, event_id, connection, **unknown_fields)
+        return False
+    if rewrite_event:
+        queue_fields["event_json"] = json.dumps(event, ensure_ascii=False)
+    if not settle_processing_transition(
+        event,
+        event_id,
+        connection,
+        status="skipped",
+        due_at=None,
+        decision="skip",
+        reason=reason,
+        category=category,
+        **queue_fields,
+    ):
+        return False
+    complete_event(event_id, "")
+    return True
+
+
 def finish_burst_superseded(
     event: dict,
     event_id: str,
@@ -14922,39 +14873,17 @@ def finish_conversation_advanced(
     connection: sqlite3.Connection | None,
 ) -> bool:
     event = release_media_event(event)
-    audited_event = _coalesced_burst_event(event)
-    if not durable_policy_skip(
-        audited_event,
-        event_id,
-        "conversation_advanced",
-        category="policy",
-    ):
-        finish_delivery_unknown(
-            event,
-            event_id,
-            connection,
-            decision="skip",
-            reason="conversation_advanced",
-            category="policy",
-        )
-        return False
-    if not settle_processing_transition(
+    return finish_proven_skip(
         event,
         event_id,
         connection,
-        status="skipped",
-        due_at=None,
-        decision="skip",
-        reason="conversation_advanced",
-        category="policy",
+        "conversation_advanced",
+        audited_event=_coalesced_burst_event(event),
+        rewrite_event=True,
         reply=None,
         scheduled_delay_seconds=None,
         error_class=None,
-        event_json=json.dumps(event, ensure_ascii=False),
-    ):
-        return False
-    complete_event(event_id, "")
-    return True
+    )
 
 
 def finish_scheduled_stale_backlog(
@@ -14964,37 +14893,17 @@ def finish_scheduled_stale_backlog(
 ) -> None:
     """Project one expired scheduled reply as a strict, proven no-send skip."""
     event = release_media_event(event)
-    audited_event = _coalesced_burst_event(event)
-    if not durable_policy_skip(
-        audited_event,
-        event_id,
-        "stale_backlog",
-    ):
-        finish_delivery_unknown(
-            event,
-            event_id,
-            connection,
-            decision="skip",
-            reason="stale_backlog",
-            category="policy",
-        )
-        return
-    if not settle_processing_transition(
+    finish_proven_skip(
         event,
         event_id,
         connection,
-        status="skipped",
-        due_at=None,
-        decision="skip",
-        reason="stale_backlog",
-        category="policy",
+        "stale_backlog",
+        audited_event=_coalesced_burst_event(event),
+        rewrite_event=True,
         reply=None,
         scheduled_delay_seconds=None,
         error_class=None,
-        event_json=json.dumps(event, ensure_ascii=False),
-    ):
-        return
-    complete_event(event_id, "")
+    )
 
 
 def defer_scheduled_pre_send_unavailable(
@@ -15097,14 +15006,6 @@ def defer_processing_for_context_refresh(
     )
 
 
-def processing_job_has_no_send_attempt(
-    connection: sqlite3.Connection | None,
-    event_id: str,
-) -> bool:
-    """Return true only before send_reply durable sending transition."""
-    return reply_job_delivery_phase(connection, event_id) == "processing"
-
-
 def reply_job_delivery_phase(
     connection: sqlite3.Connection | None,
     event_id: str,
@@ -15197,32 +15098,16 @@ def finish_turn_policy_skip(
         finish_conversation_advanced(event, event_id, connection)
         return
     event = release_media_event(event)
-    if not durable_policy_skip(event, event_id, reason):
-        finish_delivery_unknown(
-            event,
-            event_id,
-            connection,
-            decision="skip",
-            reason=reason,
-            category="policy",
-        )
-        return
-    if not settle_processing_transition(
+    finish_proven_skip(
         event,
         event_id,
         connection,
-        status="skipped",
-        due_at=None,
-        decision="skip",
-        reason=reason,
-        category="policy",
+        reason,
+        rewrite_event=True,
         reply=None,
         scheduled_delay_seconds=None,
         error_class=None,
-        event_json=json.dumps(event, ensure_ascii=False),
-    ):
-        return
-    complete_event(event_id, "")
+    )
 
 
 def process_job(
@@ -15269,421 +15154,89 @@ def process_job(
         except (TypeError, ValueError):
             suffix = None
         if _proactive_unknown_is_closed_slot(event, suffix):
-            if not durable_policy_skip(
-                event,
-                event_id,
-                "stale_backlog",
-                category="policy",
-            ):
-                finish_delivery_unknown(
-                    event,
-                    event_id,
-                    connection,
-                    decision="skip",
-                    reason="stale_backlog",
-                    category="policy",
-                )
-                return
-            if not settle_processing_transition(
+            finish_proven_skip(
                 event,
                 event_id,
                 connection,
-                status="skipped",
-                due_at=None,
-                decision="skip",
-                reason="stale_backlog",
-                category="policy",
+                "stale_backlog",
                 reply=None,
                 scheduled_delay_seconds=None,
                 error_class="stale_backlog",
-            ):
-                return
-            complete_event(event_id, "")
+            )
             return
 
     if previous_status == "scheduled":
-        try:
-            if event.get("proactive") is True:
-                stale_backlog = False
-            else:
-                persisted_upper = event.get("response_window_upper_seconds")
-                stale_backlog = event_exceeds_response_upper(
-                    event,
-                    persisted_upper
-                    if persisted_upper is not None
-                    else PRE_SEND_DEFAULT_RESPONSE_WINDOW_SECONDS,
-                )
-        except RetrievalError:
-            finish_delivery_unknown(event, event_id, connection)
-            return
-        if stale_backlog:
+        _deliver_scheduled_reply(job, event, event_id, connection)
+        return
+    _analyze_and_schedule_reply(event, event_id, connection)
+
+
+def _deliver_scheduled_reply(
+    job: dict,
+    event: dict,
+    event_id: str,
+    connection: sqlite3.Connection | None,
+) -> None:
+    """Send a due scheduled reply, or settle why it was not sent."""
+    try:
+        if event.get("proactive") is True:
+            stale_backlog = False
+        else:
             persisted_upper = event.get("response_window_upper_seconds")
-            if not str(job.get("reply") or "").strip() or _past_send_grace(
+            stale_backlog = event_exceeds_response_upper(
                 event,
                 persisted_upper
                 if persisted_upper is not None
                 else PRE_SEND_DEFAULT_RESPONSE_WINDOW_SECONDS,
-            ):
-                # Past the window plus grace a formed draft must not go out
-                # either: the room has moved on and an old reply reads as a bot.
-                finish_scheduled_stale_backlog(event, event_id, connection)
-                return
-        current_watermark = (
-            None
-            if event.get("proactive") is True
-            else stable_room_watermark_log_id(event)
-        )
-        if event.get("proactive") is not True and current_watermark is None:
-            defer_processing_for_context_refresh(
-                event,
-                event_id,
-                connection,
-                reason="context_freshness_unavailable",
             )
-            return
-        analysis_watermark = _fence_int(event.get("analysis_watermark_log_id"))
-        if event.get("proactive") is not True and (
-            analysis_watermark is None or current_watermark != analysis_watermark
-        ):
-            defer_processing_for_context_refresh(
-                event,
-                event_id,
-                connection,
-                reason=(
-                    "context_freshness_unavailable"
-                    if current_watermark is None or analysis_watermark is None
-                    else "conversation_context_changed"
-                ),
-            )
-            return
-        # Room activity after analysis invalidates the stored draft, not the
-        # inbound event. Requeue it for fresh local context and analysis.
-        inbound_log_id = _fence_int(event.get("log_id"))
-        reply = str(job.get("reply") or "").strip()
-        if later_self_already_replied(inbound_log_id, reply):
-            update_job(
-                event_id,
-                connection=connection,
-                status="sent",
-                due_at=None,
-                error_class=None,
-            )
-            complete_event(event_id, reply)
-            return
-
-        if not reply:
-            if not durable_policy_skip(
-                event,
-                event_id,
-                "empty_scheduled_reply",
-                category="uncertain",
-            ):
-                finish_delivery_unknown(
-                    event,
-                    event_id,
-                    connection,
-                    decision="skip",
-                    reason="empty_scheduled_reply",
-                    category="uncertain",
-                )
-                return
-            if not settle_processing_transition(
-                event,
-                event_id,
-                connection,
-                status="skipped",
-                due_at=None,
-                decision="skip",
-                reason="empty_scheduled_reply",
-                category="uncertain",
-                reply=None,
-                scheduled_delay_seconds=None,
-                error_class="empty_scheduled_reply",
-            ):
-                return
-            complete_event(event_id, "")
-            return
-
-        inbound_text = str(event.get("message") or "")
-        skip_reason = REPLY_LAUGHTER_POLICY_REASON
-        if _constructed_geeknews_outbound(event, job):
-            valid = True
-        elif event.get("rerank_fallback") == "lenient_policy":
-            valid = bool(_lenient_policy_draft([reply], inbound_text))
-            if not valid:
-                skip_reason = "policy_lenient_violation"
-        else:
-            reasons_out = []
-            valid = _policy_valid_draft(
-                reply,
-                inbound_text,
-                _event_recent_conversation(event),
-                recipient=_event_author_nickname(event),
-                laughter_allowed=(
-                    event.get("laughter_allowed")
-                    if isinstance(event.get("laughter_allowed"), bool)
-                    else None
-                ),
-                awe_allowed=(
-                    event.get("awe_allowed") if isinstance(event.get("awe_allowed"), bool) else None
-                ),
-                reasons_out=reasons_out,
-            )
-            if not valid and reasons_out:
-                skip_reason = f"policy_{reasons_out[0]}"
-
-        if not valid:
-            if not durable_policy_skip(
-                event,
-                event_id,
-                skip_reason,
-                category="policy",
-            ):
-                finish_delivery_unknown(
-                    event,
-                    event_id,
-                    connection,
-                    decision="skip",
-                    reason=skip_reason,
-                    category="policy",
-                )
-                return
-            if not settle_processing_transition(
-                event,
-                event_id,
-                connection,
-                status="skipped",
-                due_at=None,
-                decision="skip",
-                reason=skip_reason,
-                category="policy",
-                reply=None,
-                scheduled_delay_seconds=None,
-                error_class=skip_reason,
-            ):
-                return
-            complete_event(event_id, "")
-            return
-
-        preflight = pre_ax_delivery_probe(
+    except RetrievalError:
+        finish_delivery_unknown(event, event_id, connection)
+        return
+    if stale_backlog:
+        persisted_upper = event.get("response_window_upper_seconds")
+        if not str(job.get("reply") or "").strip() or _past_send_grace(
             event,
-            expected_target_chat_id=_fence_int(event.get("chat_id")),
-            expected_owner=str(event.get("owner_id") or "").strip() or None,
-            expected_epoch=_fence_int(event.get("source_epoch")),
-        )
-        if preflight["result"] != "ready":
-            # The probe is read-only and the claimed row is still processing,
-            # so no composer mutation or Return can have occurred. Preserve
-            # the generated reply and retry within its fixed response window.
-            defer_scheduled_pre_send_unavailable(
-                event,
-                event_id,
-                connection,
-            )
-            return
-        pre_send_watermark = (
-            None
-            if event.get("proactive") is True
-            else stable_room_watermark_log_id(event)
-        )
-        analysis_watermark = _fence_int(event.get("analysis_watermark_log_id"))
-        if event.get("proactive") is not True and (
-            pre_send_watermark is None
-            or analysis_watermark is None
-            or pre_send_watermark != analysis_watermark
+            persisted_upper
+            if persisted_upper is not None
+            else PRE_SEND_DEFAULT_RESPONSE_WINDOW_SECONDS,
         ):
-            defer_processing_for_context_refresh(
-                event,
-                event_id,
-                connection,
-                reason=(
-                    "conversation_context_changed"
-                    if pre_send_watermark is not None
-                    and analysis_watermark is not None
-                    and pre_send_watermark > analysis_watermark
-                    else "context_freshness_unavailable"
-                ),
-            )
+            # Past the window plus grace a formed draft must not go out
+            # either: the room has moved on and an old reply reads as a bot.
+            finish_scheduled_stale_backlog(event, event_id, connection)
             return
-        # A new part can arrive while the scheduled reply is being checked.
-        # Re-read the durable queue immediately before entering sending state.
-        if connection is not None and _superseded_by(connection, event):
-            finish_burst_superseded(event, event_id, connection)
-            return
-        # The operator allows at most one reply per inbound burst and forbids
-        # repeating a recent reply shape. Both were only checked during the
-        # model analysis, which can race with a sibling job still sending, so
-        # the final boundary re-checks them against durable queue evidence.
-        repeat_hold = _send_time_repeat_hold(
-            event, reply, _event_recent_conversation(event), connection
+    current_watermark = (
+        None
+        if event.get("proactive") is True
+        else stable_room_watermark_log_id(event)
+    )
+    if event.get("proactive") is not True and current_watermark is None:
+        defer_processing_for_context_refresh(
+            event,
+            event_id,
+            connection,
+            reason="context_freshness_unavailable",
         )
-        if repeat_hold:
-            if not durable_policy_skip(event, event_id, repeat_hold, category="policy"):
-                finish_delivery_unknown(event, event_id, connection)
-                return
-            if not settle_processing_transition(
-                event,
-                event_id,
-                connection,
-                status="skipped",
-                due_at=None,
-                decision="skip",
-                reason=repeat_hold,
-                category="policy",
-                error_class=repeat_hold,
-            ):
-                return
-            complete_event(event_id, "")
-            return
-        hold_reasons: list[str] = []
-        if not send_reply(
-            reply,
-            event=event,
-            event_id=event_id,
-            connection=connection,
-            expected_target_chat_id=_fence_int(event.get("chat_id")),
-            expected_owner=str(event.get("owner_id") or "").strip() or None,
-            expected_epoch=_fence_int(event.get("source_epoch")),
-            hold_out=hold_reasons,
-        ):
-            if hold_reasons:
-                hold_reason = hold_reasons[0]
-                if hold_reason in {
-                    "conversation_context_changed",
-                    "context_freshness_unavailable",
-                }:
-                    defer_processing_for_context_refresh(
-                        event,
-                        event_id,
-                        connection,
-                        reason=hold_reason,
-                    )
-                    return
-                # This hold fired before `sending` was committed, so it is a
-                # proven no-send policy or configuration outcome.
-                hold_category = (
-                    "configuration"
-                    if hold_reason == "send_allowlist_rejected"
-                    else "policy"
-                )
-                if not durable_policy_skip(event, event_id, hold_reason, category=hold_category):
-                    finish_delivery_unknown(
-                        event,
-                        event_id,
-                        connection,
-                        reply=reply,
-                        error_class=hold_reason,
-                    )
-                    return
-                if not settle_processing_transition(
-                    event,
-                    event_id,
-                    connection,
-                    status="skipped",
-                    due_at=None,
-                    decision="skip",
-                    reason=hold_reason,
-                    category=hold_category,
-                    reply=None,
-                    scheduled_delay_seconds=None,
-                    error_class=hold_reason,
-                ):
-                    return
-                complete_event(event_id, "")
-                return
-            # Inspect the durable send phase before classifying newer room
-            # activity.  Once ``sending`` is committed, Return may already
-            # have been posted even when a successor arrived or the local DB
-            # confirmation later failed.  Such a row is always uncertain and
-            # must never be rewritten as a proven no-send skip.
-            delivery_phase = reply_job_delivery_phase(connection, event_id)
-            if delivery_phase == "sending":
-                finish_delivery_unknown(
-                    event,
-                    event_id,
-                    connection,
-                    reply=reply,
-                    error_class=DELIVERY_UNKNOWN,
-                )
-                return
-            if delivery_phase == "projection_pending":
-                finish_burst_superseded(event, event_id, connection)
-                return
-            if delivery_phase != "processing":
-                finish_delivery_unknown(
-                    event,
-                    event_id,
-                    connection,
-                    reply=reply,
-                    error_class=DELIVERY_UNKNOWN,
-                )
-                return
-            if connection is not None and _superseded_by(connection, event):
-                finish_burst_superseded(event, event_id, connection)
-                return
-            # send_reply commits ``sending`` before invoking local-send.
-            # Still processing therefore proves a pre-AX failure.
-            defer_scheduled_pre_send_unavailable(
-                event,
-                event_id,
-                connection,
-            )
-            return
-
-        # The repetition/burst hold already ran inside send_reply immediately
-        # before the sending transition; checking again here would only be able
-        # to mis-record a reply that already reached the room.
-        if not update_context_decision(event_id, "sending"):
-            update_job(
-                event_id,
-                connection=connection,
-                status=DELIVERY_UNKNOWN,
-                due_at=None,
-                error_class=RECONCILE_REQUIRED_REASON,
-            )
-            record_delivery_unknown(event_id, reply)
-            return
-
-        record_delivery_ledger(event, reply, job=job, connection=connection)
-        sent_at = utc_now()
-        if not update_context_decision(event_id, "sent", reply, sent_at):
-            # The context update command can commit and then lose its stdout.
-            # Re-read the durable projection before declaring uncertainty.
-            try:
-                terminal = _context_terminal_decision(event_id)
-                fields = (
-                    _terminal_queue_fields(
-                        "sending",
-                        reply,
-                        terminal,
-                        event_id=event_id,
-                    )
-                    if terminal is not None
-                    else None
-                )
-                healed = fields is not None and _apply_recovered_terminal(
-                    connection,
-                    event_id,
-                    fields,
-                    expected_status="sending",
-                )
-                if healed:
-                    connection.commit()
-            except (OSError, PermissionError, sqlite3.Error, ValueError):
-                _rollback_queue_transaction(connection)
-                healed = False
-            if healed:
-                complete_event(event_id, reply)
-            else:
-                update_job(
-                    event_id,
-                    connection=connection,
-                    status=DELIVERY_UNKNOWN,
-                    due_at=None,
-                    error_class=RECONCILE_REQUIRED_REASON,
-                )
-                record_delivery_unknown(event_id, reply)
-            return
+        return
+    analysis_watermark = _fence_int(event.get("analysis_watermark_log_id"))
+    if event.get("proactive") is not True and (
+        analysis_watermark is None or current_watermark != analysis_watermark
+    ):
+        defer_processing_for_context_refresh(
+            event,
+            event_id,
+            connection,
+            reason=(
+                "context_freshness_unavailable"
+                if current_watermark is None or analysis_watermark is None
+                else "conversation_context_changed"
+            ),
+        )
+        return
+    # Room activity after analysis invalidates the stored draft, not the
+    # inbound event. Requeue it for fresh local context and analysis.
+    inbound_log_id = _fence_int(event.get("log_id"))
+    reply = str(job.get("reply") or "").strip()
+    if later_self_already_replied(inbound_log_id, reply):
         update_job(
             event_id,
             connection=connection,
@@ -15694,6 +15247,264 @@ def process_job(
         complete_event(event_id, reply)
         return
 
+    if not reply:
+        finish_proven_skip(
+            event,
+            event_id,
+            connection,
+            "empty_scheduled_reply",
+            category="uncertain",
+            reply=None,
+            scheduled_delay_seconds=None,
+            error_class="empty_scheduled_reply",
+        )
+        return
+
+    inbound_text = str(event.get("message") or "")
+    skip_reason = REPLY_LAUGHTER_POLICY_REASON
+    if _constructed_geeknews_outbound(event, job):
+        valid = True
+    elif event.get("rerank_fallback") == "lenient_policy":
+        valid = bool(_lenient_policy_draft([reply], inbound_text))
+        if not valid:
+            skip_reason = "policy_lenient_violation"
+    else:
+        reasons_out = []
+        valid = _policy_valid_draft(
+            reply,
+            inbound_text,
+            _event_recent_conversation(event),
+            recipient=_event_author_nickname(event),
+            laughter_allowed=(
+                event.get("laughter_allowed")
+                if isinstance(event.get("laughter_allowed"), bool)
+                else None
+            ),
+            awe_allowed=(
+                event.get("awe_allowed") if isinstance(event.get("awe_allowed"), bool) else None
+            ),
+            reasons_out=reasons_out,
+        )
+        if not valid and reasons_out:
+            skip_reason = f"policy_{reasons_out[0]}"
+
+    if not valid:
+        finish_proven_skip(
+            event,
+            event_id,
+            connection,
+            skip_reason,
+            reply=None,
+            scheduled_delay_seconds=None,
+            error_class=skip_reason,
+        )
+        return
+
+    preflight = pre_ax_delivery_probe(
+        event,
+        expected_target_chat_id=_fence_int(event.get("chat_id")),
+        expected_owner=str(event.get("owner_id") or "").strip() or None,
+        expected_epoch=_fence_int(event.get("source_epoch")),
+    )
+    if preflight["result"] != "ready":
+        # The probe is read-only and the claimed row is still processing,
+        # so no composer mutation or Return can have occurred. Preserve
+        # the generated reply and retry within its fixed response window.
+        defer_scheduled_pre_send_unavailable(
+            event,
+            event_id,
+            connection,
+        )
+        return
+    pre_send_watermark = (
+        None
+        if event.get("proactive") is True
+        else stable_room_watermark_log_id(event)
+    )
+    analysis_watermark = _fence_int(event.get("analysis_watermark_log_id"))
+    if event.get("proactive") is not True and (
+        pre_send_watermark is None
+        or analysis_watermark is None
+        or pre_send_watermark != analysis_watermark
+    ):
+        defer_processing_for_context_refresh(
+            event,
+            event_id,
+            connection,
+            reason=(
+                "conversation_context_changed"
+                if pre_send_watermark is not None
+                and analysis_watermark is not None
+                and pre_send_watermark > analysis_watermark
+                else "context_freshness_unavailable"
+            ),
+        )
+        return
+    # A new part can arrive while the scheduled reply is being checked.
+    # Re-read the durable queue immediately before entering sending state.
+    if connection is not None and _superseded_by(connection, event):
+        finish_burst_superseded(event, event_id, connection)
+        return
+    # The operator allows at most one reply per inbound burst and forbids
+    # repeating a recent reply shape. Both were only checked during the
+    # model analysis, which can race with a sibling job still sending, so
+    # the final boundary re-checks them against durable queue evidence.
+    repeat_hold = _send_time_repeat_hold(
+        event, reply, _event_recent_conversation(event), connection
+    )
+    if repeat_hold:
+        finish_proven_skip(
+            event,
+            event_id,
+            connection,
+            repeat_hold,
+            unknown_fields={},
+            error_class=repeat_hold,
+        )
+        return
+    hold_reasons: list[str] = []
+    if not send_reply(
+        reply,
+        event=event,
+        event_id=event_id,
+        connection=connection,
+        expected_target_chat_id=_fence_int(event.get("chat_id")),
+        expected_owner=str(event.get("owner_id") or "").strip() or None,
+        expected_epoch=_fence_int(event.get("source_epoch")),
+        hold_out=hold_reasons,
+    ):
+        if hold_reasons:
+            hold_reason = hold_reasons[0]
+            if hold_reason in {
+                "conversation_context_changed",
+                "context_freshness_unavailable",
+            }:
+                defer_processing_for_context_refresh(
+                    event,
+                    event_id,
+                    connection,
+                    reason=hold_reason,
+                )
+                return
+            # This hold fired before `sending` was committed, so it is a
+            # proven no-send policy or configuration outcome.
+            hold_category = (
+                "configuration"
+                if hold_reason == "send_allowlist_rejected"
+                else "policy"
+            )
+            finish_proven_skip(
+                event,
+                event_id,
+                connection,
+                hold_reason,
+                category=hold_category,
+                unknown_fields={"reply": reply, "error_class": hold_reason},
+                reply=None,
+                scheduled_delay_seconds=None,
+                error_class=hold_reason,
+            )
+            return
+        # Inspect the durable send phase before classifying newer room
+        # activity.  Once ``sending`` is committed, Return may already
+        # have been posted even when a successor arrived or the local DB
+        # confirmation later failed.  Such a row is always uncertain and
+        # must never be rewritten as a proven no-send skip.
+        delivery_phase = reply_job_delivery_phase(connection, event_id)
+        if delivery_phase == "projection_pending":
+            finish_burst_superseded(event, event_id, connection)
+            return
+        if delivery_phase != "processing":
+            finish_delivery_unknown(
+                event,
+                event_id,
+                connection,
+                reply=reply,
+                error_class=DELIVERY_UNKNOWN,
+            )
+            return
+        if connection is not None and _superseded_by(connection, event):
+            finish_burst_superseded(event, event_id, connection)
+            return
+        # send_reply commits ``sending`` before invoking local-send.
+        # Still processing therefore proves a pre-AX failure.
+        defer_scheduled_pre_send_unavailable(
+            event,
+            event_id,
+            connection,
+        )
+        return
+
+    # The repetition/burst hold already ran inside send_reply immediately
+    # before the sending transition; checking again here would only be able
+    # to mis-record a reply that already reached the room.
+    if not update_context_decision(event_id, "sending"):
+        update_job(
+            event_id,
+            connection=connection,
+            status=DELIVERY_UNKNOWN,
+            due_at=None,
+            error_class=RECONCILE_REQUIRED_REASON,
+        )
+        record_delivery_unknown(event_id, reply)
+        return
+
+    record_delivery_ledger(event, reply, job=job, connection=connection)
+    sent_at = utc_now()
+    if not update_context_decision(event_id, "sent", reply, sent_at):
+        # The context update command can commit and then lose its stdout.
+        # Re-read the durable projection before declaring uncertainty.
+        try:
+            terminal = _context_terminal_decision(event_id)
+            fields = (
+                _terminal_queue_fields(
+                    "sending",
+                    reply,
+                    terminal,
+                    event_id=event_id,
+                )
+                if terminal is not None
+                else None
+            )
+            healed = fields is not None and _apply_recovered_terminal(
+                connection,
+                event_id,
+                fields,
+                expected_status="sending",
+            )
+            if healed:
+                connection.commit()
+        except (OSError, PermissionError, sqlite3.Error, ValueError):
+            _rollback_queue_transaction(connection)
+            healed = False
+        if healed:
+            complete_event(event_id, reply)
+        else:
+            update_job(
+                event_id,
+                connection=connection,
+                status=DELIVERY_UNKNOWN,
+                due_at=None,
+                error_class=RECONCILE_REQUIRED_REASON,
+            )
+            record_delivery_unknown(event_id, reply)
+        return
+    update_job(
+        event_id,
+        connection=connection,
+        status="sent",
+        due_at=None,
+        error_class=None,
+    )
+    complete_event(event_id, reply)
+
+
+def _analyze_and_schedule_reply(
+    event: dict,
+    event_id: str,
+    connection: sqlite3.Connection | None,
+) -> None:
+    """Analyze a claimed inbound event, then schedule, defer, or skip its reply."""
     analysis_watermark: int | None = None
     if event.get("proactive") is not True:
         analysis_watermark = stable_room_watermark_log_id(event)
@@ -15983,18 +15794,6 @@ def _worker_sleep_seconds(now: float, next_recovery_at: float) -> float:
     return min(WORKER_POLL_SECONDS, until_recovery or WORKER_POLL_SECONDS)
 
 
-PROACTIVE_EVENT_PREFIX = "proactive"
-PROACTIVE_TOKEN_DENYLIST = {
-    "ㅋㅋ",
-    "ㅋㅋㅋ",
-    "ㅎㅎ",
-    "ㅇㅇ",
-    "ㄷㄷ",
-    "ㅁㅊ",
-    "zz",
-    "ㅠㅠ",
-    "ㅜㅜ",
-}
 GEEKNEWS_FEED_URL = "https://news.hada.io/rss/news"
 GEEKNEWS_TOPIC_RE = re.compile(r"^https://news\.hada\.io/topic\?id=([1-9][0-9]{0,9})\Z")
 GEEKNEWS_CURSOR_NAME = "geeknews-rss-cursor.json"
@@ -16012,32 +15811,6 @@ GEEKNEWS_DAILY_SLOTS = (
 )
 GEEKNEWS_ROOM_QUIET_SECONDS = 10 * 60
 
-
-def _style_topic_candidates(common_tokens_json: str) -> list[str]:
-    try:
-        tokens = json.loads(common_tokens_json)
-    except (TypeError, ValueError, json.JSONDecodeError):
-        return []
-    if not isinstance(tokens, dict):
-        return []
-    ranked: list[tuple[int, str]] = []
-    for token, count in tokens.items():
-        if not isinstance(token, str):
-            continue
-        cleaned = token.strip()
-        if (
-            not cleaned
-            or cleaned in PROACTIVE_TOKEN_DENYLIST
-            or len(cleaned) < 2
-            or cleaned.isdigit()
-            or not any(ch.isalpha() or ("가" <= ch <= "힣") for ch in cleaned)
-        ):
-            continue
-        if isinstance(count, bool) or not isinstance(count, (int, float)):
-            continue
-        ranked.append((int(count), cleaned))
-    ranked.sort(reverse=True)
-    return [token for _, token in ranked[:8]]
 
 def _geeknews_cursor_path() -> Path:
     return QUEUE.with_name(GEEKNEWS_CURSOR_NAME)
@@ -16167,19 +15940,6 @@ def _mark_geeknews_digest_confirmed(event: dict, *, now: float | None = None) ->
         newest = max(newest, max(ids) if ids else 0)
     _store_geeknews_seen_ids(ids, newest, now=now, mark_posted_slot=True)
 
-
-def _mark_geeknews_slot_posted(*, now: float | None = None) -> None:
-    cursor = _load_geeknews_cursor()
-    seen_ids = set()
-    values = cursor.get("seen_ids")
-    if isinstance(values, list):
-        for item in values[-200:]:
-            if isinstance(item, int) and not isinstance(item, bool) and item > 0:
-                seen_ids.add(item)
-    newest = cursor.get("newest_id")
-    if not isinstance(newest, int) or isinstance(newest, bool) or newest <= 0:
-        newest = max(seen_ids) if seen_ids else 0
-    _store_geeknews_seen_ids(seen_ids, newest, now=now, mark_posted_slot=True)
 
 def _store_geeknews_seen_ids(
     seen_ids: set[int],
@@ -16345,67 +16105,6 @@ def _next_geeknews_digest(
         "message": message,
         "ids": [item["id"] for item in chosen],
     }
-
-def _proactive_search_hits(query: str) -> list[dict]:
-    """Ask the trusted reply runner for current public links. Never live-sends."""
-    if not runner_is_trusted(force_full=True) or not REPLY_RUNNER.exists():
-        return []
-    prompt = (
-        "Return only JSON array of up to 2 public news or trend links. "
-        f"Query: {query}. Each item: {{\"title\":\"...\",\"url\":\"https://...\"}}."
-    )
-    command = [
-        str(REPLY_RUNNER),
-        "-p",
-        "--no-session",
-        "--no-rules",
-        "--no-lsp",
-        "--no-title",
-        "--no-pty",
-        "--tools",
-        "web_search",
-        "--mode",
-        "text",
-        "--thinking",
-        _reply_thinking_effort() or "medium",
-    ]
-    active_model = _active_reply_model()
-    if active_model:
-        command.extend(["--model", active_model])
-    try:
-        returncode, stdout_bytes, _ = _run_bounded_process(
-            command,
-            cwd=ROOT,
-            env={"HOME": str(Path.home()), "PATH": "/Users/twoimo/.bun/bin:/usr/bin:/bin:/opt/homebrew/bin"},
-            timeout=45.0,
-            stdout_cap=MAX_MODEL_OUTPUT_BYTES,
-            stderr_cap=MAX_MODEL_STDERR_BYTES,
-        )
-    except (OSError, subprocess.TimeoutExpired, _CaptureOverflow, _CaptureIOError):
-        return []
-    if returncode != 0:
-        return []
-    text = stdout_bytes.decode("utf-8", errors="replace")
-    start = text.find("[")
-    end = text.rfind("]")
-    if start < 0 or end <= start:
-        return []
-    try:
-        parsed = json.loads(text[start : end + 1])
-    except json.JSONDecodeError:
-        return []
-    if not isinstance(parsed, list):
-        return []
-    hits = []
-    for item in parsed[:2]:
-        if not isinstance(item, dict):
-            continue
-        title = str(item.get("title") or "").strip()
-        url = str(item.get("url") or "").strip()
-        if title and url.startswith("https://"):
-            hits.append({"title": title, "url": url})
-    return hits
-
 
 def _load_proactive_vector_profiles() -> tuple[dict | None, dict | None]:
     style_profile = None
