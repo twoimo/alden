@@ -83,8 +83,6 @@ fn write_state(path: &Path, state: &OpenKakaoState) -> Result<()> {
     let parent = path
         .parent()
         .with_context(|| format!("{} has no parent directory", path.display()))?;
-    fs::create_dir_all(parent).with_context(|| format!("Failed to create {}", parent.display()))?;
-
     let data = serde_json::to_string_pretty(state).context("Failed to serialize state")?;
 
     // Readers take no lock, so state.json is only ever replaced whole.
@@ -316,9 +314,29 @@ fn mutate_state(mutator: impl FnOnce(&mut OpenKakaoState)) -> Result<()> {
 }
 
 fn mutate_state_at(path: &Path, mutator: impl FnOnce(&mut OpenKakaoState)) -> Result<()> {
+    let _lock = lock_state(path)?;
     let mut state = read_state(path)?;
     mutator(&mut state);
     write_state(path, &state)
+}
+
+/// Serializes read-modify-write across CLI processes. The lock lives on a
+/// sibling file because state.json itself is replaced by rename.
+fn lock_state(path: &Path) -> Result<fs::File> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create {}", parent.display()))?;
+    }
+    let lock_path = path.with_extension("json.lock");
+    let file = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&lock_path)
+        .with_context(|| format!("Failed to open {}", lock_path.display()))?;
+    file.lock()
+        .with_context(|| format!("Failed to lock {}", lock_path.display()))?;
+    Ok(file)
 }
 
 #[cfg(test)]
@@ -354,6 +372,22 @@ mod tests {
             reader.join().unwrap()
         });
         assert_eq!(torn_reads, 0, "a reader saw an empty or partial state file");
+    }
+
+    #[test]
+    fn concurrent_state_updates_are_not_lost() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.json");
+        std::thread::scope(|scope| {
+            for _ in 0..4 {
+                scope.spawn(|| {
+                    for _ in 0..25 {
+                        mutate_state_at(&path, |state| state.consecutive_failures += 1).unwrap();
+                    }
+                });
+            }
+        });
+        assert_eq!(read_state(&path).unwrap().consecutive_failures, 100);
     }
 
     #[cfg(unix)]
