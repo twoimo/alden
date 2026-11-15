@@ -1,4 +1,4 @@
-import type { BackgroundStatus, JobEvent, PipelineStatus } from "../contracts";
+import type { BackgroundStatus, JobEvent, PipelineStage, PipelineStatus } from "../contracts";
 
 const TOTAL_BOOST = 0.35;
 
@@ -23,7 +23,7 @@ export interface LatticePulse {
 // queue .20, context .35, model .85, delay .05, send .60, confirm .25.
 // The table lives at module scope: the poll path rebuilt it on every call
 // before this (2026-09-22).
-const PIPELINE_STAGE_WEIGHTS: Readonly<Record<string, number>> = {
+const PIPELINE_STAGE_WEIGHTS: Readonly<Partial<Record<PipelineStage, number>>> = {
   detect: 0.10,
   authorize: 0.15,
   queue: 0.20,
