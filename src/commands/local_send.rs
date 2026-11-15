@@ -5,18 +5,30 @@ use anyhow::Result;
 
 use crate::ax_send;
 use crate::config;
-use crate::local_db::{LocalDbReader, LocalMessage, LocalPollEnvelope, LOCAL_POLL_SCHEMA_VERSION};
+use crate::local_db::{
+    LocalDbReader, LocalMessage, LocalPollEnvelope, LOCAL_POLL_MAX_ROWS, LOCAL_POLL_SCHEMA_VERSION,
+};
 use crate::util::{confirm, normalize_outgoing_message, truncate, validate_outbound_message};
 use openkakao_cli::reply_policy::validate_auto_reply_laughter;
 
 const WORKER_LOCAL_CONFIRMATION_TIMEOUT: Duration = Duration::from_secs(3);
 const WORKER_LOCAL_CONFIRMATION_INTERVAL: Duration = Duration::from_millis(250);
-const WORKER_LOCAL_CONFIRMATION_ROW_LIMIT: usize = 8;
 
 pub struct BoundLocalSend {
     pub chat_id: i64,
-    pub expected_source_log_id: i64,
+    /// Newest conversational row in the room before AX touched the composer.
+    /// Only a row after it can be this send's delivery proof.
+    pub pre_send_tail_log_id: i64,
     pub local_tail: Vec<crate::ax_send::BindingToken>,
+}
+
+/// The source fence is read before AX touches the composer, so every row up to
+/// its newest one predates this send, including the room's own self rows.
+pub fn pre_send_tail_log_id(source_log_id: i64, source_fence: &LocalPollEnvelope) -> i64 {
+    source_fence
+        .completeness
+        .available_max_log_id
+        .map_or(source_log_id, |newest| newest.max(source_log_id))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,15 +58,15 @@ pub struct LocalSendOptions {
 fn classify_worker_local_confirmation(
     envelope: &LocalPollEnvelope,
     expected_chat_id: i64,
-    expected_source_log_id: i64,
+    after_log_id: i64,
     expected_message: &str,
 ) -> LocalConfirmationObservation {
     let completeness = &envelope.completeness;
     if expected_chat_id <= 0
-        || expected_source_log_id <= 0
+        || after_log_id <= 0
         || envelope.schema_version != LOCAL_POLL_SCHEMA_VERSION
         || envelope.chat.chat_id != expected_chat_id
-        || completeness.after_log_id != expected_source_log_id
+        || completeness.after_log_id != after_log_id
         || envelope.chat.last_log_id != completeness.chat_last_log_id
         || completeness.id_domain != "global_sparse"
         || completeness.returned_count != envelope.messages.len() as i64
@@ -67,7 +79,7 @@ fn classify_worker_local_confirmation(
         let exact_empty_snapshot = completeness.status == "empty"
             && !completeness.has_gap
             && !completeness.has_more
-            && completeness.chat_last_log_id == expected_source_log_id
+            && completeness.chat_last_log_id == after_log_id
             && completeness.row_count == 0
             && completeness.returned_count == 0
             && completeness.first_log_id.is_none()
@@ -77,7 +89,7 @@ fn classify_worker_local_confirmation(
         let narrow_snapshot_race = completeness.status == "gap"
             && completeness.has_gap
             && !completeness.has_more
-            && completeness.chat_last_log_id > expected_source_log_id
+            && completeness.chat_last_log_id > after_log_id
             && completeness.row_count == 0
             && completeness.returned_count == 0
             && completeness.first_log_id.is_none()
@@ -100,7 +112,7 @@ fn classify_worker_local_confirmation(
         .iter()
         .filter(|row| {
             row.chat_id == expected_chat_id
-                && row.log_id > expected_source_log_id
+                && row.log_id > after_log_id
                 && row.is_self
                 && row.message_type == 1
                 && normalize_outgoing_message(&row.message) == expected
@@ -113,7 +125,7 @@ fn classify_worker_local_confirmation(
         || envelope
             .messages
             .iter()
-            .any(|row| row.is_self && row.log_id > expected_source_log_id)
+            .any(|row| row.is_self && row.log_id > after_log_id)
     {
         return LocalConfirmationObservation::Rejected;
     }
@@ -125,44 +137,53 @@ fn classify_worker_local_confirmation(
 /// is intentionally unconfirmed: callers must never retry Return.
 fn confirm_worker_local_delivery(
     chat_id: i64,
-    expected_source_log_id: i64,
+    after_log_id: i64,
     expected_message: &str,
 ) -> Option<i64> {
-    let deadline = Instant::now() + WORKER_LOCAL_CONFIRMATION_TIMEOUT;
     let mut reader = None;
+    await_worker_local_confirmation(chat_id, after_log_id, expected_message, |limit| {
+        if reader.is_none() {
+            reader = LocalDbReader::open_no_mutation().ok();
+        }
+        let page = reader
+            .as_ref()
+            .map(|current| current.poll_after(chat_id, limit, Some(after_log_id)));
+        match page {
+            Some(Ok(envelope)) => Some(envelope),
+            _ => {
+                // Re-open on the next bounded attempt. This may be a short
+                // SQLite/WAL visibility race, but it is never proof.
+                reader = None;
+                None
+            }
+        }
+    })
+}
+
+fn await_worker_local_confirmation(
+    chat_id: i64,
+    after_log_id: i64,
+    expected_message: &str,
+    mut poll: impl FnMut(usize) -> Option<LocalPollEnvelope>,
+) -> Option<i64> {
+    let deadline = Instant::now() + WORKER_LOCAL_CONFIRMATION_TIMEOUT;
     loop {
         if Instant::now() >= deadline {
             return None;
         }
-        if reader.is_none() {
-            reader = LocalDbReader::open_no_mutation().ok();
-        }
-        if let Some(current_reader) = reader.as_ref() {
-            match current_reader.poll_after(
+        if let Some(envelope) = poll(LOCAL_POLL_MAX_ROWS) {
+            if Instant::now() >= deadline {
+                return None;
+            }
+            match classify_worker_local_confirmation(
+                &envelope,
                 chat_id,
-                WORKER_LOCAL_CONFIRMATION_ROW_LIMIT,
-                Some(expected_source_log_id),
+                after_log_id,
+                expected_message,
             ) {
-                Ok(envelope) => {
-                    if Instant::now() >= deadline {
-                        return None;
-                    }
-                    match classify_worker_local_confirmation(
-                        &envelope,
-                        chat_id,
-                        expected_source_log_id,
-                        expected_message,
-                    ) {
-                        LocalConfirmationObservation::Pending => {}
-                        LocalConfirmationObservation::Confirmed(log_id) => return Some(log_id),
-                        LocalConfirmationObservation::Rejected => return None,
-                    }
-                }
-                Err(_) => {
-                    // Re-open on the next bounded attempt. This may be a short
-                    // SQLite/WAL visibility race, but it is never proof.
-                    reader = None;
-                }
+                LocalConfirmationObservation::Pending => {}
+                LocalConfirmationObservation::Confirmed(log_id) => return Some(log_id),
+                LocalConfirmationObservation::Rejected => return None,
             }
         }
 
@@ -401,7 +422,7 @@ pub fn cmd_local_send(opts: LocalSendOptions) -> Result<()> {
                 return Ok(());
             }
         }
-        confirm_worker_local_delivery(bound.chat_id, bound.expected_source_log_id, &message)
+        confirm_worker_local_delivery(bound.chat_id, bound.pre_send_tail_log_id, &message)
     } else if let Some(source) = reply_to {
         ax_send::reply_via_ax(chat_name, source, &message)?;
         None
@@ -471,7 +492,7 @@ pub fn require_allowed_send_chat(config: &config::OpenKakaoConfig, chat_name: &s
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::local_db::{LocalChat, LocalMessage, LocalPollCompleteness};
+    use crate::local_db::{poll_completeness, LocalChat, LocalMessage, LocalPollCompleteness};
 
     const CHAT_ID: i64 = 42;
     const SOURCE_LOG_ID: i64 = 100;
@@ -536,6 +557,78 @@ mod tests {
         }
     }
 
+    fn target_chat(last_log_id: i64) -> LocalChat {
+        LocalChat {
+            chat_id: CHAT_ID,
+            chat_type: 1,
+            chat_name: "target".to_string(),
+            database_chat_name: None,
+            active_members_count: 2,
+            last_log_id,
+            last_updated_at: 1_000,
+            unread_count: 0,
+            display_name: String::new(),
+        }
+    }
+
+    /// `poll_after` over an in-memory room whose rows are ordered by log ID.
+    fn room_page(room: &[LocalMessage], limit: usize, after_log_id: i64) -> LocalPollEnvelope {
+        let after: Vec<LocalMessage> = room
+            .iter()
+            .filter(|row| row.log_id > after_log_id)
+            .cloned()
+            .collect();
+        let messages: Vec<LocalMessage> = after.iter().take(limit).cloned().collect();
+        let chat_last_log_id = room.last().map_or(after_log_id, |row| row.log_id);
+        LocalPollEnvelope {
+            schema_version: LOCAL_POLL_SCHEMA_VERSION,
+            chat: target_chat(chat_last_log_id),
+            completeness: poll_completeness(
+                after_log_id,
+                chat_last_log_id,
+                &messages,
+                after.len() as i64,
+                after.last().map(|row| row.log_id),
+            ),
+            messages,
+        }
+    }
+
+    #[test]
+    fn worker_confirmation_sees_a_reply_behind_a_burst_of_room_rows() {
+        let mut room = vec![message(SOURCE_LOG_ID, false, "question")];
+        room.extend((1..=9).map(|offset| message(SOURCE_LOG_ID + offset, false, "chatter")));
+        room.push(message(SOURCE_LOG_ID + 10, true, "reply"));
+
+        let confirmed = await_worker_local_confirmation(CHAT_ID, SOURCE_LOG_ID, "reply", |limit| {
+            Some(room_page(&room, limit, SOURCE_LOG_ID))
+        });
+        assert_eq!(confirmed, Some(SOURCE_LOG_ID + 10));
+    }
+
+    #[test]
+    fn worker_confirmation_never_takes_a_pre_send_self_row_with_the_same_text() {
+        let mut room = vec![
+            message(SOURCE_LOG_ID, false, "question"),
+            message(SOURCE_LOG_ID + 1, false, "chatter"),
+            message(SOURCE_LOG_ID + 2, true, "ㅋㅋㅋ"),
+            message(SOURCE_LOG_ID + 3, false, "chatter"),
+        ];
+        let source_fence = room_page(&room, 1, SOURCE_LOG_ID);
+        let after_log_id = pre_send_tail_log_id(SOURCE_LOG_ID, &source_fence);
+        let before_delivery = room.clone();
+        room.push(message(SOURCE_LOG_ID + 4, true, "ㅋㅋㅋ"));
+
+        let mut polls = 0;
+        let confirmed =
+            await_worker_local_confirmation(CHAT_ID, after_log_id, "ㅋㅋㅋ", |limit| {
+                polls += 1;
+                let visible = if polls == 1 { &before_delivery } else { &room };
+                Some(room_page(visible, limit, after_log_id))
+            });
+        assert_eq!(confirmed, Some(SOURCE_LOG_ID + 4));
+    }
+
     #[test]
     fn worker_confirmation_waits_only_for_empty_or_narrow_snapshot_race() {
         let empty = page(Vec::new(), "empty", SOURCE_LOG_ID, 0, false, false);
@@ -569,7 +662,7 @@ mod tests {
             json: false,
             bound_chat: worker_bound.then(|| BoundLocalSend {
                 chat_id: CHAT_ID,
-                expected_source_log_id: SOURCE_LOG_ID,
+                pre_send_tail_log_id: SOURCE_LOG_ID,
                 local_tail: vec![crate::ax_send::BindingToken::from("source".to_string())],
             }),
             reply_to: None,

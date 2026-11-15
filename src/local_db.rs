@@ -2023,7 +2023,7 @@ impl LocalDbReader {
 
 /// Classifies one bounded `poll_after` page against the row count and maximum
 /// log ID read from the same SQLite snapshot.
-fn poll_completeness(
+pub fn poll_completeness(
     after_log_id: i64,
     chat_last_log_id: i64,
     messages: &[LocalMessage],

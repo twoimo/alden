@@ -596,7 +596,10 @@ pub fn prepare_local_send(
                     .collect();
                 bound_chat = Some(commands::local_send::BoundLocalSend {
                     chat_id: target_chat_id,
-                    expected_source_log_id: expected_last_observed,
+                    pre_send_tail_log_id: commands::local_send::pre_send_tail_log_id(
+                        expected_last_observed,
+                        &source_fence,
+                    ),
                     local_tail,
                 });
             }
