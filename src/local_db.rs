@@ -2107,44 +2107,13 @@ impl LocalDbReader {
         }) {
             anyhow::bail!("reconcile_required");
         }
-        let first_log_id = messages.first().map(|message| message.log_id);
-        let last_log_id = messages.last().map(|message| message.log_id);
-        let rows_match_aggregate = total_rows >= 0 && total_rows as usize == messages.len();
-        let has_more = total_rows >= 0 && total_rows as usize > messages.len();
-        let (status, has_gap) =
-            if chat.last_log_id < after_log_id || (!rows_match_aggregate && !has_more) {
-                ("unknown", true)
-            } else if has_more {
-                ("partial", false)
-            } else if let Some(last) = last_log_id {
-                if chat.last_log_id != last || available_max != Some(last) {
-                    ("gap", true)
-                } else {
-                    ("complete", false)
-                }
-            } else if chat.last_log_id != after_log_id {
-                ("gap", true)
-            } else {
-                ("empty", false)
-            };
-        let completeness = LocalPollCompleteness {
-            status: status.to_string(),
+        let completeness = poll_completeness(
             after_log_id,
-            first_log_id,
-            last_log_id,
-            chat_last_log_id: chat.last_log_id,
-            row_count: total_rows,
-            returned_count: messages.len() as i64,
-            available_max_log_id: available_max,
-            id_domain: LOCAL_POLL_ID_DOMAIN.to_string(),
-            has_gap,
-            has_more,
-            proof: if has_gap {
-                "reconcile_required".to_string()
-            } else {
-                "sqlite_snapshot_rowset".to_string()
-            },
-        };
+            chat.last_log_id,
+            &messages,
+            total_rows,
+            available_max,
+        );
 
         let envelope = LocalPollEnvelope {
             schema_version: LOCAL_POLL_SCHEMA_VERSION,
@@ -2170,6 +2139,55 @@ impl LocalDbReader {
         tx.commit()?;
         self.ensure_database_identity()?;
         Ok(envelope)
+    }
+}
+
+/// Classifies one bounded `poll_after` page against the row count and maximum
+/// log ID read from the same SQLite snapshot.
+fn poll_completeness(
+    after_log_id: i64,
+    chat_last_log_id: i64,
+    messages: &[LocalMessage],
+    total_rows: i64,
+    available_max: Option<i64>,
+) -> LocalPollCompleteness {
+    let first_log_id = messages.first().map(|message| message.log_id);
+    let last_log_id = messages.last().map(|message| message.log_id);
+    let rows_match_aggregate = total_rows >= 0 && total_rows as usize == messages.len();
+    let has_more = total_rows >= 0 && total_rows as usize > messages.len();
+    let (status, has_gap) =
+        if chat_last_log_id < after_log_id || (!rows_match_aggregate && !has_more) {
+            ("unknown", true)
+        } else if has_more {
+            ("partial", false)
+        } else if let Some(last) = last_log_id {
+            if chat_last_log_id != last || available_max != Some(last) {
+                ("gap", true)
+            } else {
+                ("complete", false)
+            }
+        } else if chat_last_log_id != after_log_id {
+            ("gap", true)
+        } else {
+            ("empty", false)
+        };
+    LocalPollCompleteness {
+        status: status.to_string(),
+        after_log_id,
+        first_log_id,
+        last_log_id,
+        chat_last_log_id,
+        row_count: total_rows,
+        returned_count: messages.len() as i64,
+        available_max_log_id: available_max,
+        id_domain: LOCAL_POLL_ID_DOMAIN.to_string(),
+        has_gap,
+        has_more,
+        proof: if has_gap {
+            "reconcile_required".to_string()
+        } else {
+            "sqlite_snapshot_rowset".to_string()
+        },
     }
 }
 
