@@ -2233,4 +2233,373 @@ mod forward_tests {
             assert!(!ev.result_code.contains("secret-path"));
         }
     }
+
+    type JournalRecord = (PipelineEvent, Option<u32>, Option<u32>);
+    type JournalShape = (Stage, StageStatus, String, Option<u32>, Option<u32>);
+
+    /// Captures exactly what the forwarder hands the journal, image counts included.
+    #[derive(Default)]
+    struct RecordingJournal {
+        records: RefCell<Vec<JournalRecord>>,
+    }
+
+    impl HistoryStore for RecordingJournal {
+        fn recent(&self, _limit: usize) -> Result<Vec<PipelineEvent>, crate::logging::StoreError> {
+            Ok(Vec::new())
+        }
+
+        fn append(&self, ev: PipelineEvent) -> Result<(), crate::logging::StoreError> {
+            self.records.borrow_mut().push((ev, None, None));
+            Ok(())
+        }
+
+        fn append_with_images(
+            &self,
+            ev: PipelineEvent,
+            images_source: Option<u32>,
+            images_delivered: Option<u32>,
+        ) -> Result<(), crate::logging::StoreError> {
+            self.records
+                .borrow_mut()
+                .push((ev, images_source, images_delivered));
+            Ok(())
+        }
+    }
+
+    /// A collector whose work takes `takes_ms` on the forwarder's own clock.
+    struct SlowCollector {
+        clock: VirtualClock,
+        takes_ms: i64,
+    }
+
+    impl LinkCollector for SlowCollector {
+        fn collect(&self, _url: &str) -> Result<Collected, CollectFailure> {
+            self.clock.advance_ms(self.takes_ms);
+            Ok(collected(1))
+        }
+    }
+
+    struct ForwardRun {
+        outcome: LinkOutcome,
+        journal: Vec<JournalShape>,
+        sends: usize,
+        marked: Vec<bool>,
+    }
+
+    const FORWARD_START_MS: i64 = 5_000;
+
+    /// Forwards `https://x.com/a` to rooms 1 and/or 2 and captures everything a
+    /// caller or the journal can observe.
+    fn forward_and_record(
+        collector: &dyn LinkCollector,
+        sender: &ScriptedSender,
+        ladder: &ImageLadder<'_>,
+        screen_recording_granted: bool,
+        mentions: &[&str],
+        already_delivered_to: &[i64],
+    ) -> ForwardRun {
+        let cat = catalog(&[(1, "스터디"), (2, "독서")]);
+        let ledger = SqliteDeliveryLedger::open_in_memory().unwrap();
+        for chat_id in already_delivered_to {
+            ledger
+                .mark(*chat_id, &canonical_link_key("https://x.com/a"), 1)
+                .unwrap();
+        }
+        let journal = RecordingJournal::default();
+        let clock = VirtualClock::new(FORWARD_START_MS);
+        let fwd = LinkForwarder {
+            collector,
+            sender,
+            ledger: &ledger,
+            catalog: &cat,
+            ladder,
+            journal: &journal,
+            clock: &clock,
+            screen_recording_granted,
+        };
+        let outcome = match fwd.forward(&ForwardRequest {
+            links: vec!["https://x.com/a".into()],
+            room_mentions: mentions.iter().map(|m| (*m).to_string()).collect(),
+        }) {
+            ForwardOutcome::Ran { mut links } => links.remove(0).outcome,
+            other => panic!("expected ran, got {other:?}"),
+        };
+        let journal = journal
+            .records
+            .into_inner()
+            .into_iter()
+            .map(|(ev, source, delivered)| {
+                assert_eq!(ev.flow, FlowKind::LinkForward);
+                assert_eq!(ev.trace_id, "forward:https://x.com/a");
+                (ev.stage, ev.status, ev.result_code, source, delivered)
+            })
+            .collect();
+        let marked = [1, 2]
+            .iter()
+            .map(|chat_id| ledger.is_delivered(*chat_id, &canonical_link_key("https://x.com/a")))
+            .collect();
+        ForwardRun {
+            outcome,
+            journal,
+            sends: sender.send_count(),
+            marked,
+        }
+    }
+
+    fn delivered_rooms(outcome: &LinkOutcome) -> Vec<(i64, String, DeliveryResult)> {
+        match outcome {
+            LinkOutcome::Delivered { rooms, .. } => rooms
+                .iter()
+                .map(|room| (room.chat_id, room.room_title.clone(), room.result.clone()))
+                .collect(),
+            other => panic!("expected delivered, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn forward_journals_and_reports_every_room_outcome() {
+        let harness = Harness::new();
+        let ok_ladder = harness.ladder();
+        let s = |code: &str| code.to_string();
+
+        // Room 1 already has the link; room 2 receives it with every image.
+        let run = forward_and_record(
+            &ScriptedCollector::ok(collected(2)),
+            &ScriptedSender::new(RoomSendOutcome::Sent { images_delivered: 2 }),
+            &ok_ladder,
+            true,
+            &["스터디", "독서"],
+            &[1],
+        );
+        assert_eq!(
+            delivered_rooms(&run.outcome),
+            vec![
+                (1, s("스터디"), DeliveryResult::AlreadyDelivered),
+                (
+                    2,
+                    s("독서"),
+                    DeliveryResult::Sent {
+                        images: ImageTally { source: 2, delivered: 2 }
+                    }
+                ),
+            ]
+        );
+        assert_eq!(
+            run.journal,
+            vec![
+                (Stage::PreSend, StageStatus::Success, s("forward_already"), Some(2), Some(0)),
+                (Stage::Commit, StageStatus::Success, s("forward_sent"), Some(2), Some(2)),
+            ]
+        );
+        assert_eq!((run.sends, run.marked), (1, vec![true, true]));
+        assert!(matches!(
+            run.outcome,
+            LinkOutcome::Delivered {
+                pii: PiiTally { phone: 0, address: 0, account: 0 },
+                source_images: 2,
+                dropped_images: 0,
+                ..
+            }
+        ));
+
+        let run = forward_and_record(
+            &ScriptedCollector::ok(collected(1)),
+            &ScriptedSender::new(RoomSendOutcome::Fenced { reason: s("꺼짐") }),
+            &ok_ladder,
+            true,
+            &["스터디"],
+            &[],
+        );
+        assert_eq!(
+            delivered_rooms(&run.outcome),
+            vec![(1, s("스터디"), DeliveryResult::Fenced { reason: s("꺼짐") })]
+        );
+        assert_eq!(
+            run.journal,
+            vec![(Stage::Authorize, StageStatus::Failed, s("forward_fenced"), Some(1), Some(0))]
+        );
+        assert_eq!((run.sends, run.marked), (1, vec![false, false]));
+
+        let run = forward_and_record(
+            &ScriptedCollector::ok(collected(1)),
+            &ScriptedSender::new(RoomSendOutcome::Failed { code: "send_timeout" }),
+            &ok_ladder,
+            true,
+            &["스터디"],
+            &[],
+        );
+        assert_eq!(
+            delivered_rooms(&run.outcome),
+            vec![(1, s("스터디"), DeliveryResult::Failed { code: "send_timeout" })]
+        );
+        assert_eq!(
+            run.journal,
+            vec![(Stage::Commit, StageStatus::Failed, s("forward_failed"), Some(1), Some(0))]
+        );
+        assert_eq!(run.marked, vec![false, false]);
+
+        // One image was acquired and sent but never confirmed.
+        let run = forward_and_record(
+            &ScriptedCollector::ok(collected(2)),
+            &ScriptedSender::new(RoomSendOutcome::Sent { images_delivered: 1 }),
+            &ok_ladder,
+            true,
+            &["스터디"],
+            &[],
+        );
+        assert_eq!(
+            delivered_rooms(&run.outcome),
+            vec![(
+                1,
+                s("스터디"),
+                DeliveryResult::PartialFailure {
+                    images: ImageTally { source: 2, delivered: 1 },
+                    miss_reasons: vec![s("이미지 1장은 전송에 실패했어요. 다시 보내 볼까요?")],
+                }
+            )]
+        );
+        assert_eq!(
+            run.journal,
+            vec![(Stage::Commit, StageStatus::Failed, s("forward_partial"), Some(2), Some(1))]
+        );
+        assert_eq!(run.marked, vec![false, false]);
+
+        // Twelve source images: two are dropped by the per-post cap.
+        let run = forward_and_record(
+            &ScriptedCollector::ok(collected(12)),
+            &ScriptedSender::new(RoomSendOutcome::Sent {
+                images_delivered: MAX_IMAGES_PER_POST,
+            }),
+            &ok_ladder,
+            true,
+            &["스터디"],
+            &[],
+        );
+        assert_eq!(
+            delivered_rooms(&run.outcome),
+            vec![(
+                1,
+                s("스터디"),
+                DeliveryResult::PartialFailure {
+                    images: ImageTally { source: 12, delivered: 10 },
+                    miss_reasons: vec![s(
+                        "이미지 2장은 한 게시물 최대 10장 제한을 넘어 전달하지 못했어요."
+                    )],
+                }
+            )]
+        );
+        assert_eq!(
+            run.journal,
+            vec![(Stage::Commit, StageStatus::Failed, s("forward_partial"), Some(12), Some(10))]
+        );
+
+        // No rung yields an image and screen capture lacks permission.
+        let never = [
+            NeverAcquirer { kind: ImageAcquisition::OriginalSave },
+            NeverAcquirer { kind: ImageAcquisition::CacheFolder },
+            NeverAcquirer { kind: ImageAcquisition::ScreenCapture },
+        ];
+        let never_clock = VirtualClock::new(0);
+        let never_ladder = ImageLadder {
+            steps: [&never[0], &never[1], &never[2]],
+            clock: &never_clock,
+        };
+        let run = forward_and_record(
+            &ScriptedCollector::ok(collected(2)),
+            &ScriptedSender::new(RoomSendOutcome::Sent { images_delivered: 0 }),
+            &never_ladder,
+            false,
+            &["스터디"],
+            &[],
+        );
+        let permission = s("화면 기록 권한이 없어 일부 이미지를 가져오지 못했어요.");
+        assert_eq!(
+            delivered_rooms(&run.outcome),
+            vec![(
+                1,
+                s("스터디"),
+                DeliveryResult::PartialFailure {
+                    images: ImageTally { source: 2, delivered: 0 },
+                    miss_reasons: vec![permission.clone(), permission],
+                }
+            )]
+        );
+        assert_eq!(
+            run.journal,
+            vec![(Stage::Commit, StageStatus::Failed, s("forward_partial"), Some(2), Some(0))]
+        );
+
+        let run = forward_and_record(
+            &ScriptedCollector::fail(CollectFailure::DeadlineExceeded),
+            &ScriptedSender::new(RoomSendOutcome::Sent { images_delivered: 0 }),
+            &ok_ladder,
+            true,
+            &["스터디"],
+            &[],
+        );
+        assert_eq!(
+            run.outcome,
+            LinkOutcome::CollectFailed(CollectFailure::DeadlineExceeded)
+        );
+        assert_eq!(
+            run.journal,
+            vec![(Stage::Retrieve, StageStatus::Failed, s("collect_failed"), None, None)]
+        );
+        assert_eq!(run.sends, 0);
+    }
+
+    #[test]
+    fn forward_deadline_is_journaled_with_elapsed_time_and_sends_nothing() {
+        let harness = Harness::new();
+        let ladder = harness.ladder();
+        let cat = catalog(&[(1, "스터디")]);
+        let ledger = SqliteDeliveryLedger::open_in_memory().unwrap();
+        let journal = RecordingJournal::default();
+        let clock = VirtualClock::new(FORWARD_START_MS);
+        let collector = SlowCollector {
+            clock: clock.clone(),
+            takes_ms: (FORWARD_DEADLINE_SECS * 1_000) as i64,
+        };
+        let sender = ScriptedSender::new(RoomSendOutcome::Sent { images_delivered: 1 });
+        let fwd = LinkForwarder {
+            collector: &collector,
+            sender: &sender,
+            ledger: &ledger,
+            catalog: &cat,
+            ladder: &ladder,
+            journal: &journal,
+            clock: &clock,
+            screen_recording_granted: true,
+        };
+        let outcome = fwd.forward(&ForwardRequest {
+            links: vec!["https://x.com/a".into()],
+            room_mentions: vec!["스터디".into()],
+        });
+        assert_eq!(
+            outcome,
+            ForwardOutcome::Ran {
+                links: vec![LinkResult {
+                    link: "https://x.com/a".into(),
+                    outcome: LinkOutcome::DeadlineExceeded,
+                }]
+            }
+        );
+        assert_eq!(sender.send_count(), 0);
+        assert_eq!(
+            journal.records.into_inner(),
+            vec![(
+                PipelineEvent {
+                    trace_id: "forward:https://x.com/a".into(),
+                    flow: FlowKind::LinkForward,
+                    stage: Stage::Retrieve,
+                    status: StageStatus::Failed,
+                    result_code: "deadline_exceeded".into(),
+                    duration_ms: FORWARD_DEADLINE_SECS * 1_000,
+                    at: FORWARD_START_MS + (FORWARD_DEADLINE_SECS * 1_000) as i64,
+                },
+                None,
+                None,
+            )]
+        );
+    }
 }

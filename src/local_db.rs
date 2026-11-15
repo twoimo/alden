@@ -2996,6 +2996,379 @@ mod tests {
         Ok(())
     }
 
+    const READER_FIXTURE_KEY: &str = "reader-query-fixture-key";
+    const READER_FIXTURE_SELF_ID: i64 = 900;
+
+    /// Opens a production `LocalDbReader` over a synthetic, encrypted copy of
+    /// the KakaoTalk tables the reader queries. No real account data is used.
+    fn reader_query_fixture() -> Result<(tempfile::TempDir, LocalDbReader)> {
+        let tempdir = tempfile::tempdir()?;
+        let source_path = tempdir.path().join("source.sqlite3");
+        let replica_path = tempdir.path().join("replica.sqlite3");
+        {
+            let connection = Connection::open(&source_path)?;
+            connection.pragma_update(None, "key", READER_FIXTURE_KEY)?;
+            connection.pragma_update(None, "cipher_compatibility", 3)?;
+            connection.execute_batch(
+                "CREATE TABLE NTUser(
+                    userId INTEGER NOT NULL, linkId INTEGER NOT NULL,
+                    displayName TEXT, friendNickName TEXT, nickName TEXT);
+                 CREATE TABLE NTChatRoom(
+                    chatId INTEGER PRIMARY KEY, type INTEGER, chatName TEXT,
+                    activeMembersCount INTEGER, lastLogId INTEGER, lastUpdatedAt INTEGER,
+                    countOfNewMessage INTEGER, directChatMemberUserId INTEGER, extra TEXT,
+                    linkId INTEGER, displayMemberIds BLOB, hidden INTEGER NOT NULL DEFAULT 0);
+                 CREATE TABLE NTChatMessage(
+                    chatId INTEGER NOT NULL, logId INTEGER NOT NULL, authorId INTEGER NOT NULL,
+                    message TEXT, attachment TEXT, type INTEGER NOT NULL, sentAt INTEGER NOT NULL);
+                 CREATE TABLE NTChatMeta(
+                    chatId INTEGER NOT NULL, kakaoGroupName TEXT, groupNickname TEXT,
+                    content TEXT, updatedAt INTEGER);
+                 CREATE TABLE NTOpenLink(linkId INTEGER NOT NULL, linkName TEXT);
+
+                 INSERT INTO NTUser VALUES (700, 0, 'Alice', NULL, NULL);
+                 INSERT INTO NTUser VALUES (701, 0, NULL, 'Bob-friend', 'bob');
+                 INSERT INTO NTUser VALUES (702, 0, NULL, NULL, 'carol');
+                 INSERT INTO NTUser VALUES (703, 5, 'LinkOnly', NULL, NULL);
+                 INSERT INTO NTUser VALUES (900, 0, 'Me', NULL, NULL);
+
+                 INSERT INTO NTChatRoom VALUES
+                    (42, 1, 'Ops West', 5, 103, 3000, 2, NULL, '', 0, NULL, 0);
+                 INSERT INTO NTChatRoom VALUES
+                    (45, 1, '', 3, 0, 2500, 0, NULL, '', 0,
+                     X'BC02000000000000BF02000000000000', 0);
+                 INSERT INTO NTChatRoom VALUES
+                    (43, 0, '', 2, 205, 2000, 0, 701, '', 0, NULL, 0);
+                 INSERT INTO NTChatRoom VALUES
+                    (46, 2, NULL, 4, 0, 1500, 0, NULL, '{\"title\":\"Extra Title\"}', 7, NULL, 0);
+                 INSERT INTO NTChatRoom VALUES
+                    (44, 0, '', 1, 0, 1000, 0, 900, '', 0, NULL, 0);
+                 INSERT INTO NTChatRoom VALUES
+                    (47, 1, 'Hidden Group', 4, 0, 900, 0, NULL, '', 0, NULL, 1);
+                 INSERT INTO NTChatRoom VALUES
+                    (48, 1, '', 3, 0, 800, 0, NULL, '', 0, NULL, 0);
+                 INSERT INTO NTChatRoom VALUES
+                    (49, 1, '', 3, 0, 700, 0, NULL, '', 0, NULL, 0);
+                 INSERT INTO NTChatRoom VALUES
+                    (-1, 0, 'system', 0, 0, 100, 0, NULL, '', 0, NULL, 0);
+
+                 INSERT INTO NTChatMeta VALUES (42, 'Ops West Team', NULL, NULL, 1);
+                 INSERT INTO NTChatMeta VALUES (46, NULL, NULL, '{\"name\":\"Meta Name\"}', 5);
+                 INSERT INTO NTChatMeta VALUES (49, NULL, 'Nick Group', NULL, 1);
+                 INSERT INTO NTOpenLink VALUES (7, 'Open Link Room');
+
+                 INSERT INTO NTChatMessage VALUES (42, 100, 700, 'hello team', NULL, 1, 1000);
+                 INSERT INTO NTChatMessage VALUES (42, 101, 900, 'my reply', '', 1, 1100);
+                 INSERT INTO NTChatMessage VALUES
+                    (42, 102, 701, NULL, '{\"k\":\"a/b.jpg\"}', 2, 1200);
+                 INSERT INTO NTChatMessage VALUES (42, 103, 702, 'last words', '', 1, 1300);
+                 INSERT INTO NTChatMessage VALUES (42, 104, 702, 'edit-control', '', 0, 1400);
+                 INSERT INTO NTChatMessage VALUES (43, 200, 701, 'dm hi', '', 1, 2000);
+                 INSERT INTO NTChatMessage VALUES (43, 201, 999, 'unknown author', '', 1, 2100);",
+            )?;
+        }
+        std::fs::copy(&source_path, &replica_path)?;
+        let source = LocalDbReplicaSource {
+            db_identity: database_identity(&source_path)?,
+            db_path: source_path,
+            secure_key: READER_FIXTURE_KEY.to_string(),
+            account_fingerprint: "synthetic-reader-fixture".to_string(),
+            account_user_id: READER_FIXTURE_SELF_ID,
+        };
+        let reader = source.open_replica(&replica_path)?;
+        Ok((tempdir, reader))
+    }
+
+    fn message_json(
+        (log_id, chat_id, author_id, sender_name): (i64, i64, i64, &str),
+        (message, attachment, message_type, sent_at): (&str, &str, i32, i64),
+    ) -> serde_json::Value {
+        json!({
+            "log_id": log_id,
+            "chat_id": chat_id,
+            "author_id": author_id,
+            "is_self": author_id == READER_FIXTURE_SELF_ID,
+            "sender_name": sender_name,
+            "message": message,
+            "attachment": attachment,
+            "message_type": message_type,
+            "sent_at": sent_at,
+        })
+    }
+
+    #[test]
+    fn reader_chat_listings_keep_their_order_titles_and_filters() -> Result<()> {
+        let (_tempdir, reader) = reader_query_fixture()?;
+        let chat = |id: i64, kind: i32, name: &str, members: i32, last: i64, updated: i64| {
+            json!({
+                "chat_id": id,
+                "chat_type": kind,
+                "chat_name": name,
+                "active_members_count": members,
+                "last_log_id": last,
+                "last_updated_at": updated,
+                "unread_count": if id == 42 { 2 } else { 0 },
+                "display_name": match id { 43 => "Bob-friend", 44 => "Me", _ => "" },
+            })
+        };
+
+        assert_eq!(
+            serde_json::to_value(reader.list_chats(100)?)?,
+            json!([
+                chat(42, 1, "Ops West", 5, 103, 3000),
+                chat(45, 1, "", 3, 0, 2500),
+                chat(43, 0, "Bob-friend", 2, 205, 2000),
+                chat(46, 2, "", 4, 0, 1500),
+                chat(44, 0, "Me", 1, 0, 1000),
+                chat(47, 1, "Hidden Group", 4, 0, 900),
+                chat(48, 1, "", 3, 0, 800),
+                chat(49, 1, "", 3, 0, 700),
+                chat(-1, 0, "system", 0, 0, 100),
+            ])
+        );
+        assert_eq!(
+            reader
+                .list_chats(3)?
+                .iter()
+                .map(|chat| chat.chat_id)
+                .collect::<Vec<_>>(),
+            vec![42, 45, 43]
+        );
+        assert_eq!(
+            serde_json::to_value(reader.list_all_chats()?)?,
+            json!([
+                chat(-1, 0, "system", 0, 0, 100),
+                chat(42, 1, "Ops West", 5, 103, 3000),
+                chat(43, 0, "Bob-friend", 2, 205, 2000),
+                chat(44, 0, "Me", 1, 0, 1000),
+                chat(45, 1, "", 3, 0, 2500),
+                chat(46, 2, "", 4, 0, 1500),
+                chat(47, 1, "Hidden Group", 4, 0, 900),
+                chat(48, 1, "", 3, 0, 800),
+                chat(49, 1, "", 3, 0, 700),
+            ])
+        );
+
+        let group = |id: i64, kind: i32, title: &str, members: i32, updated: i64, unread: i64| {
+            json!({
+                "chat_id": id,
+                "chat_type": kind,
+                "title": title,
+                "members": members,
+                "last_updated_at": updated,
+                "unread_count": unread,
+            })
+        };
+        assert_eq!(
+            serde_json::to_value(reader.list_group_chats(100)?)?,
+            json!([
+                group(42, 1, "Ops West Team", 5, 3000, 2),
+                group(45, 1, "Alice, LinkOnly", 3, 2500, 0),
+                group(46, 2, "Open Link Room", 4, 1500, 0),
+                group(49, 1, "Nick Group", 3, 700, 0),
+            ])
+        );
+        assert_eq!(
+            serde_json::to_value(reader.list_group_chats(2)?)?,
+            json!([
+                group(42, 1, "Ops West Team", 5, 3000, 2),
+                group(45, 1, "Alice, LinkOnly", 3, 2500, 0),
+            ])
+        );
+        assert_eq!(reader.find_memo_chat_id()?, Some(44));
+        assert_eq!(
+            reader
+                .schema()?
+                .into_iter()
+                .map(|(name, _)| name)
+                .collect::<Vec<_>>(),
+            vec![
+                "NTChatMessage",
+                "NTChatMeta",
+                "NTChatRoom",
+                "NTOpenLink",
+                "NTUser"
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn reader_message_queries_map_rows_and_self_identity() -> Result<()> {
+        let (_tempdir, reader) = reader_query_fixture()?;
+        let m100 = message_json((100, 42, 700, "Alice"), ("hello team", "", 1, 1000));
+        let m101 = message_json((101, 42, 900, "Me"), ("my reply", "", 1, 1100));
+        let m102 = message_json(
+            (102, 42, 701, "Bob-friend"),
+            ("", "{\"k\":\"a/b.jpg\"}", 2, 1200),
+        );
+        let m103 = message_json((103, 42, 702, "carol"), ("last words", "", 1, 1300));
+        let m104 = message_json((104, 42, 702, "carol"), ("edit-control", "", 0, 1400));
+
+        assert_eq!(
+            serde_json::to_value(reader.read_messages(42, 10, None)?)?,
+            json!([m104, m103, m102, m101, m100])
+        );
+        assert_eq!(
+            serde_json::to_value(reader.read_messages(42, 2, Some(1200))?)?,
+            json!([m104, m103])
+        );
+        assert_eq!(
+            serde_json::to_value(reader.read_message_by_log_id(42, 102)?)?,
+            m102
+        );
+        assert!(reader.read_message_by_log_id(42, 999)?.is_none());
+        assert!(reader.read_message_by_log_id(43, 100)?.is_none());
+
+        assert_eq!(
+            serde_json::to_value(reader.search_messages("words", 10, None)?)?,
+            json!([message_json(
+                (103, 42, 702, "carol"),
+                ("last words", "", 1, 1300)
+            )])
+        );
+        assert_eq!(
+            serde_json::to_value(reader.search_messages("i", 10, Some(43))?)?,
+            json!([message_json(
+                (200, 43, 701, "Bob-friend"),
+                ("dm hi", "", 1, 2000)
+            )])
+        );
+        assert_eq!(
+            reader
+                .search_messages("e", 2, None)?
+                .iter()
+                .map(|message| message.log_id)
+                .collect::<Vec<_>>(),
+            vec![104, 101]
+        );
+        assert!(reader
+            .search_messages("x", 10, Some(0))
+            .unwrap_err()
+            .to_string()
+            .contains("search chat ID must be positive"));
+
+        let identity = |author_id: i64, nickname: &str| LocalAuthorIdentity {
+            author_id,
+            nickname: nickname.to_string(),
+            is_self: author_id == READER_FIXTURE_SELF_ID,
+        };
+        assert_eq!(
+            reader.room_author_identities(42)?,
+            vec![
+                identity(700, "Alice"),
+                identity(701, "Bob-friend"),
+                identity(702, "carol"),
+                identity(900, "Me"),
+            ]
+        );
+        assert_eq!(
+            reader.room_author_identities(43)?,
+            vec![identity(701, "Bob-friend"), identity(999, "")]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn reader_poll_after_reports_each_completeness_state() -> Result<()> {
+        let (_tempdir, reader) = reader_query_fixture()?;
+        let room_42 = json!({
+            "chat_id": 42,
+            "chat_type": 1,
+            "chat_name": "Ops West",
+            "active_members_count": 5,
+            "last_log_id": 103,
+            "last_updated_at": 3000,
+            "unread_count": 2,
+            "display_name": "",
+        });
+        let completeness = |status: &str,
+                            after: i64,
+                            span: (Option<i64>, Option<i64>),
+                            counts: (i64, i64, Option<i64>),
+                            chat_last: i64,
+                            has_gap: bool,
+                            has_more: bool| {
+            json!({
+                "status": status,
+                "after_log_id": after,
+                "first_log_id": span.0,
+                "last_log_id": span.1,
+                "chat_last_log_id": chat_last,
+                "row_count": counts.0,
+                "returned_count": counts.1,
+                "available_max_log_id": counts.2,
+                "id_domain": "global_sparse",
+                "has_gap": has_gap,
+                "has_more": has_more,
+                "proof": if has_gap { "reconcile_required" } else { "sqlite_snapshot_rowset" },
+            })
+        };
+        let m101 = message_json((101, 42, 900, "Me"), ("my reply", "", 1, 1100));
+        let m102 = message_json(
+            (102, 42, 701, "Bob-friend"),
+            ("", "{\"k\":\"a/b.jpg\"}", 2, 1200),
+        );
+        let m103 = message_json((103, 42, 702, "carol"), ("last words", "", 1, 1300));
+
+        assert_eq!(
+            serde_json::to_value(reader.poll_after(42, 10, Some(100))?)?,
+            json!({
+                "schema_version": 3,
+                "chat": room_42,
+                "messages": [m101, m102, m103],
+                "completeness": completeness(
+                    "complete", 100, (Some(101), Some(103)), (3, 3, Some(103)), 103, false, false
+                ),
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(reader.poll_after(42, 2, Some(100))?)?,
+            json!({
+                "schema_version": 3,
+                "chat": room_42,
+                "messages": [m101, m102],
+                "completeness": completeness(
+                    "partial", 100, (Some(101), Some(102)), (3, 2, Some(103)), 103, false, true
+                ),
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(reader.poll_after(42, 10, Some(103))?)?["completeness"],
+            completeness("empty", 103, (None, None), (0, 0, None), 103, false, false)
+        );
+        let gap = serde_json::to_value(reader.poll_after(43, 10, None)?)?;
+        assert_eq!(gap["chat"]["chat_name"], "Bob-friend");
+        assert_eq!(
+            gap["completeness"],
+            completeness(
+                "gap",
+                0,
+                (Some(200), Some(201)),
+                (2, 2, Some(201)),
+                205,
+                true,
+                false
+            )
+        );
+        assert_eq!(
+            serde_json::to_value(reader.poll_after(43, 10, Some(250))?)?["completeness"],
+            completeness("unknown", 250, (None, None), (0, 0, None), 205, true, false)
+        );
+
+        let error = |chat_id: i64, after: Option<i64>| {
+            reader
+                .poll_after(chat_id, 10, after)
+                .unwrap_err()
+                .to_string()
+        };
+        assert_eq!(error(0, None), "local poll chat ID must be positive");
+        assert_eq!(error(42, Some(-1)), "reconcile_required");
+        assert_eq!(error(42, Some(i64::MAX)), "reconcile_required");
+        assert_eq!(error(999, None), "Target chat is no longer available");
+        Ok(())
+    }
+
     #[test]
     fn local_account_fingerprint_is_stable_and_account_scoped() {
         let first = local_account_fingerprint(42, "device-a");
