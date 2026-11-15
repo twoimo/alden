@@ -665,9 +665,8 @@ def attest_app_owned_server(
 ) -> str:
     """Return an empty string when the recorded pid is provably app-owned.
 
-    Any other value is one of four bounded codes rather than a free-form
-    reason: attest_not_alive, attest_command_mismatch, attest_not_listening,
-    or attest_unknown.
+    Any other value is one of three bounded codes rather than a free-form
+    reason: attest_not_alive, attest_command_mismatch, or attest_not_listening.
     """
 
     runtime = hooks or LaunchHooks()

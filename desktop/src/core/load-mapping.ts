@@ -19,10 +19,6 @@ export interface LatticePulse {
   density: number;
 }
 
-// Active reply phases map to bounded load: detect .10, authorize .15,
-// queue .20, context .35, model .85, delay .05, send .60, confirm .25.
-// The table lives at module scope: the poll path rebuilt it on every call
-// before this (2026-09-22).
 const PIPELINE_STAGE_WEIGHTS: Readonly<Partial<Record<PipelineStage, number>>> = {
   detect: 0.10,
   authorize: 0.15,
@@ -39,9 +35,8 @@ export function clamp01(value: number): number {
   return Math.min(1, Math.max(0, value));
 }
 
-// Branch instead of building `[reply, geeknews, dbSync]` per frame. The order
-// and the "0 for anything past the third ring" fallback match the array the
-// allocating path used.
+// Branch instead of building `[reply, geeknews, dbSync]` per frame. A ring
+// past the third has no source of its own.
 function sourceAt(loads: SourceLoads, index: number): number {
   if (index === 0) return loads.reply;
   if (index === 1) return loads.geeknews;
@@ -84,8 +79,7 @@ export function ringTargetVelocities(
  * * (1 + 0.35 * max(clamp01(total), clamp01(voice))). The last factor is
  * exactly 1 when both global signals are zero.
  *
- * The render loop owns one scratch array and writes into it, so a 15-30fps
- * loop stops allocating a fresh array per frame (2026-09-22).
+ * The render loop passes its own scratch array, so a frame allocates nothing.
  */
 export function writeRingTargetVelocities(
   out: number[],

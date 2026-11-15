@@ -39,7 +39,7 @@ export function ringTilt(index: number): number {
  * The state object is also the frame result: `step` returns `this`, so the
  * 15-30fps loop reads fields that the math already wrote instead of copying
  * them into a second object. Every container it reads or writes is a stable
- * field, so a frame allocates nothing (2026-09-22).
+ * field, so a frame allocates nothing.
  */
 export class CoreRenderState {
   /** Clamped seconds of the last step; 0 for a refused step. */

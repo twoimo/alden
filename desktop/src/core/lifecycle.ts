@@ -17,10 +17,9 @@ export class RenderLifecycle {
   transition(state: LifecycleState): void {
     if (state === "visible") {
       if (this.active) return;
-      // `active` only follows a start that actually happened. Claiming it first
-      // meant a throwing `start()` left the panel inactive-but-marked-active,
-      // so every later visible signal returned early and nothing rendered until
-      // the next hide/show cycle (2026-09-22).
+      // `active` only follows a start that actually happened. Set before a
+      // throwing `start()`, it would make every later visible signal return
+      // early, and nothing would render until the next hide/show cycle.
       try {
         this.loop.start();
       } catch {
@@ -31,9 +30,8 @@ export class RenderLifecycle {
       return;
     }
     this.active = false;
-    // A throwing timer cleanup used to skip the loop stop and leave a render
-    // loop running behind a hidden window, so each half is guarded on its own
-    // (2026-09-22).
+    // Each half is guarded on its own: a throwing timer cleanup must not skip
+    // the loop stop and leave a render loop running behind a hidden window.
     this.safely(this.stopTimers);
     this.safely(() => this.loop.stop());
   }

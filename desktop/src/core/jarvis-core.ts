@@ -130,7 +130,7 @@ export class JarvisCore {
 
   private render(dt: number): void {
     // One reused frame object per tick: no array, closure or object is built
-    // inside the 15-30fps loop (2026-09-22).
+    // inside the 15-30fps loop.
     const frame = this.state.step(dt, this.ringBaseVelocity, this.ringGain);
     const rings = this.rings;
     const velocities = frame.ringVelocities;
