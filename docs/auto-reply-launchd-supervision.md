@@ -50,12 +50,13 @@ an immutable mode-`0500` `.command`, checks the session-watchdog owner lock, and
 only when the lock is free requests this exact command with:
 
 ```text
-/usr/bin/open -g -j -b com.apple.Terminal <pinned-command>
+/usr/bin/open -g -b com.apple.Terminal <pinned-command>
 ```
 
-Do not add `--hide`: it can hide an already-open Terminal application. The
-monitor runs the new command in the background and only demotes its own
-watchdog window after launch.
+Do not add `-j` or `--hide`: they are the same flag, and it can hide an
+already-open Terminal application. The monitor never scripts Terminal windows:
+it does not learn which window it opened, so closing or minimizing by title
+could reach a window the user owns.
 
 The monitor does not read the KakaoTalk database, call Accessibility or System
 Events, inspect the OpenKakao configuration or Codex credentials, generate a
