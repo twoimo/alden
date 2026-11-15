@@ -288,6 +288,23 @@ fn knob_store_generations_keeps_recent_only() {
     assert_eq!(gens[0].knobs.prompt_version, "v15");
 }
 
+#[test]
+fn knob_store_keeps_serving_after_a_writer_panics() {
+    let store = InMemoryKnobStore::new(knobs("v1")).unwrap();
+    let applied = store.apply(knobs("v2")).unwrap();
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _inner = store.inner.write().unwrap();
+        let _history = store.history.write().unwrap();
+        panic!("writer panicked while holding both knob locks");
+    }));
+    assert!(store.inner.is_poisoned() && store.history.is_poisoned());
+
+    assert_eq!(store.current(), (applied, knobs("v2")));
+    assert_eq!(store.generations(1).unwrap()[0].generation, applied);
+    assert_eq!(store.apply(knobs("v3")).unwrap(), applied + 1);
+    assert_eq!(store.current(), (applied + 1, knobs("v3")));
+}
+
 fn samples(n: usize) -> Vec<QaSample> {
     (0..n)
         .map(|i| QaSample {

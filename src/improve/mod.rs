@@ -31,7 +31,7 @@
 //! provenance 해시만 담는다 (R8.16, R12.4).
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::RwLock;
+use std::sync::{PoisonError, RwLock};
 
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
@@ -438,25 +438,19 @@ impl InMemoryKnobStore {
 
 impl KnobStore for InMemoryKnobStore {
     fn current(&self) -> (KnobGeneration, Knobs) {
-        let guard = self.inner.read().expect("knob store lock poisoned on read");
+        let guard = self.inner.read().unwrap_or_else(PoisonError::into_inner);
         (guard.0, guard.1.clone())
     }
 
     fn apply(&self, next: Knobs) -> Result<KnobGeneration, ImproveError> {
         validate_knobs(&next)?;
-        let mut guard = self
-            .inner
-            .write()
-            .expect("knob store lock poisoned on write");
+        let mut guard = self.inner.write().unwrap_or_else(PoisonError::into_inner);
         let next_gen = guard.0.saturating_add(1);
         let digest = next.digest();
         *guard = (next_gen, next.clone());
         drop(guard);
 
-        let mut history = self
-            .history
-            .write()
-            .expect("knob history lock poisoned on write");
+        let mut history = self.history.write().unwrap_or_else(PoisonError::into_inner);
         history.push(StoredGeneration {
             generation: next_gen,
             knobs: next,
@@ -470,10 +464,7 @@ impl KnobStore for InMemoryKnobStore {
     }
 
     fn generations(&self, limit: usize) -> Result<Vec<StoredGeneration>, ImproveError> {
-        let history = self
-            .history
-            .read()
-            .expect("knob history lock poisoned on read");
+        let history = self.history.read().unwrap_or_else(PoisonError::into_inner);
         Ok(history.iter().rev().take(limit).cloned().collect())
     }
 }
