@@ -15384,17 +15384,20 @@ print(json.dumps({
                     (event["event_id"],),
                 ).fetchone()
                 self.assertEqual(
-                    tuple(row),
+                    (row["status"], row["decision"], row["reason"], row["category"]),
                     (
                         "scheduled",
                         "reply",
                         module.MEDIA_UNAVAILABLE_CLARIFICATION_REASON,
-                        "question",
-                        module.MEDIA_UNAVAILABLE_CLARIFICATION,
-                        5.0,
-                        None,
+                        "social",
                     ),
                 )
+                self.assertEqual(
+                    (row["scheduled_delay_seconds"], row["error_class"]), (5.0, None)
+                )
+                # The reply prompt forbids stock photo acks such as 사진이 안 열리네.
+                self.assertTrue(row["reply"].strip())
+                self.assertNotIn("사진이 안 열리네", row["reply"])
                 self.assertEqual(recorded["style_policy_version"], module.STYLE_POLICY_VERSION)
                 self.assertIn("db:42:920", recorded["evidence_ids"])
                 self.assertFalse(recorded["provenance"]["model_invoked"])
