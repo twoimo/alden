@@ -1533,8 +1533,18 @@ def main() -> int:
     signal.signal(signal.SIGINT, _handle_shutdown_signal)
 
     acquire_owner()
-    database_started = db_ready()
-    database_reason = "ready" if database_started else "local_db_unavailable"
+    # 긱뉴스 전용 방은 DB 감시자 없이 워커만 돌린다. DB 감시자는 계정당 하나라
+    # 두 방이 동시에 요구하면 서로를 밀어낸다(2026-09-12 실측). 답장 전송도 함께
+    # 꺼지지만 워커는 계속 살아 긱뉴스 슬롯을 처리한다.
+    geeknews_only = (
+        str(os.environ.get("OPENKAKAO_GEEKNEWS_ONLY") or "").strip() == "1"
+        or _geeknews_only_room()
+    )
+    database_started = not geeknews_only and db_ready()
+    if geeknews_only:
+        database_reason = "geeknews_only"
+    else:
+        database_reason = "ready" if database_started else "local_db_unavailable"
     auto_reply_enabled, auto_reply_reason = auto_reply_config(parsed_config)
     auto_reply_section = _toml_section(parsed_config, "auto_reply", "auto-reply", "bujamentor")
     allow_link_fetch = (
@@ -1561,15 +1571,6 @@ def main() -> int:
     os.environ["OPENKAKAO_DB_SOURCE_EPOCH"] = source_epoch
     os.environ["OPENKAKAO_WATCH_OWNER"] = owner_id
     os.environ["OPENKAKAO_WATCH_EPOCH"] = source_epoch
-    # 긱뉴스 전용 방은 DB 감시자 없이 워커만 돌린다. DB 감시자는 계정당 하나라
-    # 두 방이 동시에 요구하면 서로를 밀어낸다(2026-09-12 실측). 답장 전송도 함께
-    # 꺼지지만 워커는 계속 살아 긱뉴스 슬롯을 처리한다.
-    if database_started and (
-        str(os.environ.get("OPENKAKAO_GEEKNEWS_ONLY") or "").strip() == "1"
-        or _geeknews_only_room()
-    ):
-        database_started = False
-        database_reason = "geeknews_only"
     os.environ["OPENKAKAO_DB_READY"] = "1" if database_started else "0"
     os.environ["OPENKAKAO_AUTO_REPLY_ENABLED"] = "1" if database_started and auto_reply_enabled else "0"
     os.environ[PRIVACY_ATTESTATION_ENV] = privacy_digest
@@ -1654,7 +1655,11 @@ def main() -> int:
         if exit_reason:
             write_status(**_status_context, state_name="fenced", fence_reason=exit_reason, force=True)
             stop(reason=exit_reason, exit_code=1)
-        if not _status_context["database_started"] and db_ready():
+        if (
+            not geeknews_only
+            and not _status_context["database_started"]
+            and db_ready()
+        ):
             _status_context["database_started"] = True
             _status_context["database_reason"] = "ready"
             _status_context["auto_reply_enabled"] = bool(auto_reply_enabled)
