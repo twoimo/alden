@@ -197,6 +197,8 @@ jobs:
           tests.test_jarvis_unit3
           tests.test_jarvis_voice_runtime
           tests.test_local_mlx_gateway
+          tests.test_auto_reply_metrics
+          tests.test_auto_reply_supervisor_lifecycle
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
