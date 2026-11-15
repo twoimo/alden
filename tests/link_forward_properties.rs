@@ -618,7 +618,7 @@ proptest! {
                                 prop_assert_eq!(images.source, included);
                                 prop_assert_eq!(images.delivered, delivered);
                                 // Complete ⇒ recorded as delivered (R6.14).
-                                prop_assert!(ledger.is_delivered(1, &key));
+                                prop_assert!(ledger.is_delivered(1, &key).unwrap());
                             }
                             DeliveryResult::PartialFailure { images, miss_reasons } => {
                                 prop_assert!(!complete, "partial failure on a complete delivery");
@@ -626,7 +626,7 @@ proptest! {
                                 // A miss must always be explained (R6.6, R12.6).
                                 prop_assert!(!miss_reasons.is_empty());
                                 // Partial ⇒ not recorded, so it stays retryable.
-                                prop_assert!(!ledger.is_delivered(1, &key));
+                                prop_assert!(!ledger.is_delivered(1, &key).unwrap());
                             }
                             other => prop_assert!(false, "unexpected result: {other:?}"),
                         }
@@ -756,7 +756,7 @@ proptest! {
         // Exactly one confirmed send per room, regardless of repeat count.
         prop_assert_eq!(sender.send_count(), room_count);
         for (chat_id, _) in &rooms {
-            prop_assert!(ledger.is_delivered(*chat_id, &key));
+            prop_assert!(ledger.is_delivered(*chat_id, &key).unwrap());
         }
 
         trip.assert_untouched()?;

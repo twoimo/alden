@@ -43,7 +43,7 @@
 //!   whether the acquired image came from screen capture
 //!   ([`LadderOutcome::used_screen_capture`], R7.6).
 
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use thiserror::Error;
 
 use crate::collector::{CollectFailure, Collected, RoutingCollector};
@@ -519,7 +519,9 @@ pub enum LedgerError {
 /// Records which (room, link) combinations have been confirmed as delivered, so
 /// each link is forwarded to each room at most once (R6.7, R6.14).
 pub trait DeliveryLedger {
-    fn is_delivered(&self, chat_id: i64, link_key: &str) -> bool;
+    /// Whether the combination was delivered. An error means "unknown", and
+    /// the forwarder holds the send rather than risk a second delivery.
+    fn is_delivered(&self, chat_id: i64, link_key: &str) -> Result<bool, LedgerError>;
 
     /// Record a confirmed delivery. Only a fully-delivered combination is ever
     /// marked (R6.14); an image-count mismatch never calls this, so it stays
@@ -572,14 +574,16 @@ pub fn ensure_forward_ledger_schema(conn: &Connection) -> Result<(), LedgerError
 }
 
 impl DeliveryLedger for SqliteDeliveryLedger {
-    fn is_delivered(&self, chat_id: i64, link_key: &str) -> bool {
+    fn is_delivered(&self, chat_id: i64, link_key: &str) -> Result<bool, LedgerError> {
         self.conn
             .query_row(
                 "SELECT 1 FROM forward_ledger WHERE chat_id = ?1 AND link_key = ?2",
                 params![chat_id, link_key],
                 |_| Ok(()),
             )
-            .is_ok()
+            .optional()
+            .map(|row| row.is_some())
+            .map_err(ledger_err)
     }
 
     fn mark(&self, chat_id: i64, link_key: &str, at: i64) -> Result<(), LedgerError> {
@@ -700,6 +704,10 @@ pub enum DeliveryResult {
         /// Per-issue plain-language reasons for the miss (R6.6).
         miss_reasons: Vec<String>,
     },
+    /// The delivery did not complete. `ledger_read_failed` means nothing was
+    /// sent because the ledger could not say whether the room already had it;
+    /// `ledger_write_failed` means the room received it but the ledger could
+    /// not record that, so forwarding again would send it twice.
     Failed {
         /// A short, stable failure code.
         code: &'static str,
@@ -907,36 +915,45 @@ impl LinkForwarder<'_> {
         acquire_misses: &[String],
         start: i64,
     ) -> RoomDelivery {
-        let result = if self.ledger.is_delivered(room.chat_id, link_key) {
-            DeliveryResult::AlreadyDelivered
-        } else {
-            match self
-                .sender
-                .send_forward(room.chat_id, &message.render(), &message.images)
-            {
-                RoomSendOutcome::Fenced { reason } => DeliveryResult::Fenced { reason },
-                RoomSendOutcome::Failed { code } => DeliveryResult::Failed { code },
-                RoomSendOutcome::Sent { images_delivered } => {
-                    let images = ImageTally {
-                        source: included_images,
-                        delivered: images_delivered,
-                    };
-                    if images.is_complete() {
-                        let _ = self
-                            .ledger
-                            .mark(room.chat_id, link_key, self.clock.now_ms());
-                        DeliveryResult::Sent { images }
-                    } else {
-                        // Image-count mismatch is a partial failure: do NOT mark, so
-                        // the combination stays retryable (R6.6).
-                        DeliveryResult::PartialFailure {
-                            miss_reasons: miss_reasons(
-                                included_images,
-                                images_delivered,
-                                message.dropped_images,
-                                acquire_misses,
-                            ),
-                            images,
+        let result = match self.ledger.is_delivered(room.chat_id, link_key) {
+            Ok(true) => DeliveryResult::AlreadyDelivered,
+            Err(_) => DeliveryResult::Failed {
+                code: "ledger_read_failed",
+            },
+            Ok(false) => {
+                match self
+                    .sender
+                    .send_forward(room.chat_id, &message.render(), &message.images)
+                {
+                    RoomSendOutcome::Fenced { reason } => DeliveryResult::Fenced { reason },
+                    RoomSendOutcome::Failed { code } => DeliveryResult::Failed { code },
+                    RoomSendOutcome::Sent { images_delivered } => {
+                        let images = ImageTally {
+                            source: included_images,
+                            delivered: images_delivered,
+                        };
+                        if images.is_complete() {
+                            match self
+                                .ledger
+                                .mark(room.chat_id, link_key, self.clock.now_ms())
+                            {
+                                Ok(()) => DeliveryResult::Sent { images },
+                                Err(_) => DeliveryResult::Failed {
+                                    code: "ledger_write_failed",
+                                },
+                            }
+                        } else {
+                            // Image-count mismatch is a partial failure: do NOT mark, so
+                            // the combination stays retryable (R6.6).
+                            DeliveryResult::PartialFailure {
+                                miss_reasons: miss_reasons(
+                                    included_images,
+                                    images_delivered,
+                                    message.dropped_images,
+                                    acquire_misses,
+                                ),
+                                images,
+                            }
                         }
                     }
                 }
@@ -1256,6 +1273,85 @@ mod forward_tests {
         assert!(reasons[0].contains("권한"), "{}", reasons[0]);
     }
 
+    fn forward_once_with(ledger: &dyn DeliveryLedger, sender: &ScriptedSender) -> DeliveryResult {
+        let cat = catalog(&[(1, "스터디")]);
+        let collector = ScriptedCollector::ok(collected(0));
+        let journal = SqliteHistoryStore::open_in_memory().unwrap();
+        let clock = VirtualClock::new(0);
+        let never = NeverAcquirer {
+            kind: ImageAcquisition::OriginalSave,
+        };
+        let ladder = ImageLadder {
+            steps: [&never, &never, &never],
+            clock: &clock,
+        };
+        let fwd = LinkForwarder {
+            collector: &collector,
+            sender,
+            ledger,
+            catalog: &cat,
+            ladder: &ladder,
+            journal: &journal,
+            clock: &clock,
+            screen_recording_granted: true,
+        };
+        match fwd.forward(&ForwardRequest {
+            links: vec!["https://x.com/a".into()],
+            room_mentions: vec!["스터디".into()],
+        }) {
+            ForwardOutcome::Ran { links } => delivered_rooms(&links[0].outcome).remove(0).2,
+            other => panic!("expected ran, got {other:?}"),
+        }
+    }
+
+    /// A ledger on disk whose table a second connection then breaks with
+    /// `fault_sql`, so the real store sees a real SQLite error.
+    fn faulty_ledger(fault_sql: &str) -> (tempfile::TempDir, SqliteDeliveryLedger) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ledger.db");
+        let ledger = SqliteDeliveryLedger::open(&path).unwrap();
+        Connection::open(&path)
+            .unwrap()
+            .execute_batch(fault_sql)
+            .unwrap();
+        (dir, ledger)
+    }
+
+    #[test]
+    fn unreadable_ledger_holds_the_send() {
+        let (_dir, ledger) = faulty_ledger("DROP TABLE forward_ledger;");
+        let sender = ScriptedSender::new(RoomSendOutcome::Sent {
+            images_delivered: 0,
+        });
+        let result = forward_once_with(&ledger, &sender);
+        assert_eq!(
+            sender.send_count(),
+            0,
+            "a ledger read error must not read as not-delivered"
+        );
+        assert!(
+            matches!(result, DeliveryResult::Failed { .. }),
+            "{result:?}"
+        );
+    }
+
+    #[test]
+    fn unwritable_ledger_does_not_report_sent() {
+        let (_dir, ledger) = faulty_ledger(
+            "CREATE TRIGGER refuse BEFORE INSERT ON forward_ledger
+             BEGIN SELECT RAISE(ABORT, 'disk full'); END;",
+        );
+        let sender = ScriptedSender::new(RoomSendOutcome::Sent {
+            images_delivered: 0,
+        });
+        let result = forward_once_with(&ledger, &sender);
+        assert_eq!(sender.send_count(), 1);
+        assert!(
+            matches!(result, DeliveryResult::Failed { .. }),
+            "an unrecorded delivery must not report success: {result:?}"
+        );
+    }
+
     #[test]
     fn mask_pii_masks_mobile_phone() {
         let (out, tally) = mask_pii("연락처는 010-1234-5678 입니다");
@@ -1325,10 +1421,10 @@ mod forward_tests {
     fn ledger_marks_and_reports_delivered() {
         let ledger = SqliteDeliveryLedger::open_in_memory().unwrap();
         let key = canonical_link_key("https://x.com/a/");
-        assert!(!ledger.is_delivered(1, &key));
+        assert!(!ledger.is_delivered(1, &key).unwrap());
         ledger.mark(1, &key, 100).unwrap();
-        assert!(ledger.is_delivered(1, &key));
-        assert!(!ledger.is_delivered(2, &key));
+        assert!(ledger.is_delivered(1, &key).unwrap());
+        assert!(!ledger.is_delivered(2, &key).unwrap());
     }
 
     #[test]
@@ -1346,8 +1442,8 @@ mod forward_tests {
             )
             .unwrap();
         assert_eq!(count, FORWARD_LEDGER_MAX_PER_ROOM as i64);
-        assert!(ledger.is_delivered(1, "link-1004"));
-        assert!(!ledger.is_delivered(1, "link-0"));
+        assert!(ledger.is_delivered(1, "link-1004").unwrap());
+        assert!(!ledger.is_delivered(1, "link-0").unwrap());
     }
 
     struct ScriptedCollector {
@@ -1609,7 +1705,9 @@ mod forward_tests {
             }
             other => panic!("expected ran, got {other:?}"),
         }
-        assert!(ledger.is_delivered(1, &canonical_link_key("https://x.com/a")));
+        assert!(ledger
+            .is_delivered(1, &canonical_link_key("https://x.com/a"))
+            .unwrap());
     }
 
     #[test]
@@ -1656,7 +1754,9 @@ mod forward_tests {
             },
             other => panic!("expected ran, got {other:?}"),
         }
-        assert!(!ledger.is_delivered(1, &canonical_link_key("https://x.com/a")));
+        assert!(!ledger
+            .is_delivered(1, &canonical_link_key("https://x.com/a"))
+            .unwrap());
     }
 
     #[test]
@@ -1737,7 +1837,9 @@ mod forward_tests {
             },
             other => panic!("expected ran, got {other:?}"),
         }
-        assert!(!ledger.is_delivered(1, &canonical_link_key("https://x.com/a")));
+        assert!(!ledger
+            .is_delivered(1, &canonical_link_key("https://x.com/a"))
+            .unwrap());
     }
 
     #[test]
@@ -1817,7 +1919,9 @@ mod forward_tests {
                     assert_eq!(*source_images, 12);
                     assert_eq!(*dropped_images, 2);
                     assert!(matches!(rooms[0].result, DeliveryResult::Sent { .. }));
-                    assert!(ledger.is_delivered(1, &canonical_link_key("https://x.com/a")));
+                    assert!(ledger
+                        .is_delivered(1, &canonical_link_key("https://x.com/a"))
+                        .unwrap());
                 }
                 other => panic!("expected delivered, got {other:?}"),
             },
@@ -1965,7 +2069,11 @@ mod forward_tests {
             .collect();
         let marked = [1, 2]
             .iter()
-            .map(|chat_id| ledger.is_delivered(*chat_id, &canonical_link_key("https://x.com/a")))
+            .map(|chat_id| {
+                ledger
+                    .is_delivered(*chat_id, &canonical_link_key("https://x.com/a"))
+                    .unwrap()
+            })
             .collect();
         ForwardRun {
             outcome,
