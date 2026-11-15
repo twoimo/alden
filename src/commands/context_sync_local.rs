@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 
+use crate::commands::context::context_db_path;
 use crate::context_sync_replica;
 use crate::local_db;
 
@@ -17,9 +18,7 @@ pub fn cmd_context_sync_local(
     if chat.trim().is_empty() || chat.len() > 512 || chat.chars().any(char::is_control) {
         anyhow::bail!("context sync chat name is invalid");
     }
-    let db_path = db
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(openkakao_cli::context::default_db_path);
+    let db_path = context_db_path(db);
     openkakao_cli::context::ensure_live_context_schema(&db_path)?;
     let confirmed_sends = match queue.as_deref() {
         Some(path) => {

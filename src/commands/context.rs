@@ -6,6 +6,12 @@ use anyhow::Result;
 
 use crate::util;
 
+/// The context index named by `--db`, or the default index when it is omitted.
+pub fn context_db_path(db: Option<String>) -> std::path::PathBuf {
+    db.map(std::path::PathBuf::from)
+        .unwrap_or_else(openkakao_cli::context::default_db_path)
+}
+
 pub fn cmd_context_index(
     input: String,
     chat: String,
@@ -13,9 +19,7 @@ pub fn cmd_context_index(
     queue: Option<String>,
     json: bool,
 ) -> Result<()> {
-    let db_path = db
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(openkakao_cli::context::default_db_path);
+    let db_path = context_db_path(db);
     let queue_path = queue.as_deref().map(std::path::Path::new);
     let count = openkakao_cli::context::index_csv_with_queue(
         &db_path,
@@ -59,9 +63,7 @@ pub fn cmd_context_repair_self_sends(
     if chat.trim().is_empty() || chat.len() > 512 || chat.chars().any(char::is_control) {
         anyhow::bail!("style repair chat name is invalid");
     }
-    let db_path = db
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(openkakao_cli::context::default_db_path);
+    let db_path = context_db_path(db);
     openkakao_cli::context::ensure_live_context_schema(&db_path)?;
     let confirmed_sends = match queue.as_deref() {
         Some(path) => {
@@ -113,9 +115,7 @@ pub fn cmd_context_search(
     db: Option<String>,
     json: bool,
 ) -> Result<()> {
-    let db_path = db
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(openkakao_cli::context::default_db_path);
+    let db_path = context_db_path(db);
     let mut results = openkakao_cli::context::search(
         &db_path,
         chat.as_deref(),
@@ -157,9 +157,7 @@ pub fn cmd_context_reply_bundle(
     source: Option<String>,
     db: Option<String>,
 ) -> Result<()> {
-    let db_path = db
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(openkakao_cli::context::default_db_path);
+    let db_path = context_db_path(db);
     let output = match (recipient.as_deref(), chat_id, current_log_id) {
                 (Some(recipient), Some(chat_id), Some(current_log_id)) => {
                     let mut excluded_log_ids = Vec::with_capacity(1 + exclude_log_id.len());
@@ -196,9 +194,7 @@ pub fn cmd_context_style_search(
     chat: Option<String>,
     json: bool,
 ) -> Result<()> {
-    let db_path = db
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(openkakao_cli::context::default_db_path);
+    let db_path = context_db_path(db);
     let mut results =
         openkakao_cli::context::style_search(&db_path, chat.as_deref(), &query, limit)?;
     if json {
@@ -230,9 +226,7 @@ pub fn cmd_context_recipient_style(
     db: Option<String>,
     json: bool,
 ) -> Result<()> {
-    let db_path = db
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(openkakao_cli::context::default_db_path);
+    let db_path = context_db_path(db);
     let profile = openkakao_cli::context::recipient_style_profile(
         &db_path,
         &chat,
@@ -274,9 +268,7 @@ pub fn cmd_context_response_time(
     db: Option<String>,
     json: bool,
 ) -> Result<()> {
-    let db_path = db
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(openkakao_cli::context::default_db_path);
+    let db_path = context_db_path(db);
     let stats =
         openkakao_cli::context::response_time_stats(&db_path, &chat, &user, source.as_deref())?;
     if json {
@@ -305,9 +297,7 @@ pub fn cmd_context_reply_search(
     db: Option<String>,
     json: bool,
 ) -> Result<()> {
-    let db_path = db
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(openkakao_cli::context::default_db_path);
+    let db_path = context_db_path(db);
     let mut results =
         openkakao_cli::context::reply_decision_search(&db_path, &chat, &query, limit)?;
     if json {
@@ -334,9 +324,7 @@ pub fn cmd_context_reply_search(
 }
 
 pub fn cmd_context_reply_record(record: String, db: Option<String>, json: bool) -> Result<()> {
-    let db_path = db
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(openkakao_cli::context::default_db_path);
+    let db_path = context_db_path(db);
     let applied = openkakao_cli::context::record_reply_decision(&db_path, &record)?;
     if json {
         println!(
@@ -369,9 +357,7 @@ pub fn cmd_context_reply_update(
     db: Option<String>,
     json: bool,
 ) -> Result<()> {
-    let db_path = db
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(openkakao_cli::context::default_db_path);
+    let db_path = context_db_path(db);
     let updated = openkakao_cli::context::update_reply_decision(
         &db_path,
         &event_id,
