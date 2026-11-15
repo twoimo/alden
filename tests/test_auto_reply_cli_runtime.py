@@ -10953,6 +10953,7 @@ print(json.dumps({
                     connection,
                 )
                 self.assertEqual(previous, "pending")
+                # A successor that commits before the sending CAS wins it.
                 self.assertTrue(module.enqueue_event(second))
                 self.assertEqual(
                     module.transition_processing_job(
@@ -10961,14 +10962,19 @@ print(json.dumps({
                         status="sending",
                         error_class=None,
                     ),
-                    "updated",
+                    "superseded",
                 )
+                row = connection.execute(
+                    """
+                    SELECT status, decision, reason, category, reply,
+                           ax_mutation_authorized
+                    FROM reply_jobs WHERE event_id = ?
+                    """,
+                    (first["event_id"],),
+                ).fetchone()
                 self.assertEqual(
-                    connection.execute(
-                        "SELECT status FROM reply_jobs WHERE event_id = ?",
-                        (first["event_id"],),
-                    ).fetchone()[0],
-                    "sending",
+                    tuple(row),
+                    ("projection_pending", "skip", "burst_superseded", "duplicate", None, 0),
                 )
             finally:
                 connection.close()
@@ -11011,13 +11017,20 @@ print(json.dumps({
                     ).fetchone()[0],
                     "sending",
                 )
+                self.assertEqual(
+                    connection.execute(
+                        "SELECT COUNT(*) FROM reply_job_supersessions"
+                    ).fetchone()[0],
+                    0,
+                )
+                # The successor still carries the in-burst fragment forward.
                 queued_second = json.loads(
                     connection.execute(
                         "SELECT event_json FROM reply_jobs WHERE event_id = ?",
                         (second["event_id"],),
                     ).fetchone()[0]
                 )
-                self.assertEqual(queued_second["burst_source_log_ids"], [402])
+                self.assertEqual(queued_second["burst_source_log_ids"], [401, 402])
             finally:
                 connection.close()
 
@@ -13287,7 +13300,13 @@ print(json.dumps({
                 )
                 self.assertIsNotNone(claimed)
                 job, previous_status = claimed
-                self.assertEqual(previous_status, "projection_pending")
+                # Enqueueing the successor records a supersession edge and
+                # leaves the predecessor pending until it is processed.
+                self.assertEqual(job["event_id"], first["event_id"])
+                self.assertEqual(previous_status, "pending")
+                self.assertEqual(
+                    module._superseded_by(connection, first), second["event_id"]
+                )
                 with (
                     mock.patch.object(
                         module,
