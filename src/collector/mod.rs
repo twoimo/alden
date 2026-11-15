@@ -26,7 +26,9 @@
 //! * **No login (R11.9).** There is no path anywhere here that logs into the
 //!   target service; only publicly-reachable posts are collected.
 //! * **Temp data is always deleted (R11.8).** [`TempScope`] deletes its raw
-//!   working data on [`TempScope::finish`] and, as a safety net, on `Drop`.
+//!   working data on [`TempScope::finish`] and, as a safety net, on `Drop`. A
+//!   deletion that fails or misses the five-second bound fails the collection
+//!   with [`CollectFailure::TempDataNotDeleted`], so it is never silent.
 
 use thiserror::Error;
 
@@ -150,6 +152,10 @@ pub enum CollectFailure {
     Terminal(CollectError),
     /// The twenty-second overall bound elapsed (R11.12).
     DeadlineExceeded,
+    /// The temporary raw data was not deleted, or not within five seconds
+    /// (R11.8). This replaces any other outcome, so the breach always reaches
+    /// the caller and its journal and the link is not forwarded.
+    TempDataNotDeleted(DeletionReport),
 }
 
 /// The report of deleting a [`TempScope`]'s raw working data (R11.8).
@@ -447,7 +453,10 @@ impl RoutingCollector<'_> {
         };
 
         let outcome = self.collect_within(url, &mut scope);
-        let _report = scope.finish();
+        let report = scope.finish();
+        if !report.deleted || !report.within_deadline {
+            return Err(CollectFailure::TempDataNotDeleted(report));
+        }
         outcome
     }
 
@@ -712,6 +721,57 @@ mod tests {
             "an immediate refusal was reported as \"{}\"",
             reason.as_plain()
         );
+    }
+
+    /// Collects successfully but leaves a file in a read-only directory under
+    /// the scope, so deleting the scope fails for real.
+    struct UndeletableWriter {
+        locked: std::cell::RefCell<Option<std::path::PathBuf>>,
+    }
+    impl PageCollector for UndeletableWriter {
+        fn path(&self) -> CollectorPath {
+            CollectorPath::Aside
+        }
+        fn health_check(&self) -> Result<(), CollectError> {
+            Ok(())
+        }
+        fn collect(&self, _url: &str, scope: &mut TempScope) -> Result<Collected, CollectError> {
+            use std::os::unix::fs::PermissionsExt;
+            let locked = scope.path().unwrap().join("locked");
+            std::fs::create_dir(&locked).unwrap();
+            std::fs::write(locked.join("raw.html"), b"<html>").unwrap();
+            std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555)).unwrap();
+            *self.locked.borrow_mut() = Some(locked);
+            Ok(collected(CollectorPath::Aside))
+        }
+    }
+
+    #[test]
+    fn undeleted_temp_data_is_reported_not_dropped() {
+        use std::os::unix::fs::PermissionsExt;
+        let clock = VirtualClock::new(0);
+        let aside = UndeletableWriter {
+            locked: std::cell::RefCell::new(None),
+        };
+        let fallback = ScriptedCollector::healthy(
+            CollectorPath::Fallback,
+            Ok(collected(CollectorPath::Fallback)),
+        );
+        let router = RoutingCollector {
+            aside: &aside,
+            fallback: &fallback,
+            clock: &clock,
+        };
+        let out = router.collect("https://example.com/post");
+
+        let locked = aside.locked.borrow().clone().unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::remove_dir_all(locked.parent().unwrap()).unwrap();
+
+        match out {
+            Err(CollectFailure::TempDataNotDeleted(report)) => assert!(!report.deleted),
+            other => panic!("raw data was left behind, yet the collection returned {other:?}"),
+        }
     }
 
     #[test]
