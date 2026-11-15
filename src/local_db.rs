@@ -627,9 +627,8 @@ fn user_id_matches_account_hash(user_id: i64, account_hash: &str) -> bool {
     user_id > 0 && sha512_hex(user_id.to_string().as_bytes()) == account_hash
 }
 
-fn read_cached_user_id(uuid: &str, account_hash: &str) -> Option<i64> {
-    let path = local_db_identity_cache_path()?;
-    let metadata = std::fs::symlink_metadata(&path).ok()?;
+fn read_cached_user_id(path: &Path, uuid: &str, account_hash: &str) -> Option<i64> {
+    let metadata = std::fs::symlink_metadata(path).ok()?;
     if !metadata.file_type().is_file() {
         return None;
     }
@@ -641,7 +640,7 @@ fn read_cached_user_id(uuid: &str, account_hash: &str) -> Option<i64> {
         }
     }
     let value: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&path).ok()?).ok()?;
+        serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()?;
     let matches = value.get("schema_version") == Some(&serde_json::Value::from(3))
         && value.get("uuid").and_then(|value| value.as_str()) == Some(uuid)
         && value.get("account_hash").and_then(|value| value.as_str()) == Some(account_hash);
@@ -653,9 +652,8 @@ fn read_cached_user_id(uuid: &str, account_hash: &str) -> Option<i64> {
         .and_then(|value| value.as_i64())
         .filter(|id| user_id_matches_account_hash(*id, account_hash))
 }
-fn read_cached_user_id_for_uuid(uuid: &str) -> Option<i64> {
-    let path = local_db_identity_cache_path()?;
-    let metadata = std::fs::symlink_metadata(&path).ok()?;
+fn read_cached_user_id_for_uuid(path: &Path, uuid: &str) -> Option<i64> {
+    let metadata = std::fs::symlink_metadata(path).ok()?;
     if !metadata.file_type().is_file() {
         return None;
     }
@@ -667,7 +665,7 @@ fn read_cached_user_id_for_uuid(uuid: &str) -> Option<i64> {
         }
     }
     let value: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&path).ok()?).ok()?;
+        serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()?;
     let matches = value.get("schema_version") == Some(&serde_json::Value::from(3))
         && value.get("uuid").and_then(|value| value.as_str()) == Some(uuid);
     if !matches {
@@ -762,7 +760,9 @@ fn get_user_id_from_plist_with_mode(mode: IdentityCacheMode) -> Result<i64> {
     if let (Some(uuid), Some(account_hash)) =
         (current_uuid.as_deref(), active_account_hash.as_deref())
     {
-        if let Some(user_id) = read_cached_user_id(uuid, account_hash) {
+        if let Some(user_id) = local_db_identity_cache_path()
+            .and_then(|path| read_cached_user_id(&path, uuid, account_hash))
+        {
             let db_name = derive_database_name(user_id, uuid);
             if find_database_path(&db_name).is_ok() {
                 return Ok(user_id);
@@ -781,7 +781,9 @@ fn get_user_id_from_plist_with_mode(mode: IdentityCacheMode) -> Result<i64> {
     // on the same machine must be rejected instead of selecting its database.
     if active_account_hash.is_none() {
         if let Some(uuid) = current_uuid.as_deref() {
-            if let Some(user_id) = read_cached_user_id_for_uuid(uuid) {
+            if let Some(user_id) = local_db_identity_cache_path()
+                .and_then(|path| read_cached_user_id_for_uuid(&path, uuid))
+            {
                 let db_name = derive_database_name(user_id, uuid);
                 if find_database_path(&db_name).is_ok() {
                     return Ok(user_id);
@@ -3303,6 +3305,93 @@ mod tests {
         assert_eq!(error(42, Some(i64::MAX)), "reconcile_required");
         assert_eq!(error(999, None), "Target chat is no longer available");
         Ok(())
+    }
+
+    fn write_identity_cache(path: &Path, value: &serde_json::Value, mode: u32) {
+        std::fs::write(
+            path,
+            serde_json::to_vec(value).expect("cache entry encodes"),
+        )
+        .expect("write cache entry");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
+                .expect("set cache entry mode");
+        }
+        #[cfg(not(unix))]
+        let _ = mode;
+    }
+
+    /// Reads the cache the way get_user_id_from_plist_with_mode does: bound to
+    /// the active account hash when one is known, UUID-only otherwise.
+    fn cached_user_id(path: &Path, uuid: &str, account_hash: Option<&str>) -> Option<i64> {
+        match account_hash {
+            Some(hash) => read_cached_user_id(path, uuid, hash),
+            None => read_cached_user_id_for_uuid(path, uuid),
+        }
+    }
+
+    #[test]
+    fn identity_cache_is_trusted_only_for_this_machine_and_account() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("local-db-identity.json");
+        let hash = sha512_hex(b"12345");
+        let other_hash = sha512_hex(b"777");
+        let entry = |uuid: &str, user_id: i64, schema_version: i64| {
+            json!({
+                "schema_version": schema_version,
+                "uuid": uuid,
+                "account_hash": hash,
+                "user_id": user_id,
+            })
+        };
+        let both = |path: &Path, uuid: &str| {
+            (
+                cached_user_id(path, uuid, Some(&hash)),
+                cached_user_id(path, uuid, None),
+            )
+        };
+
+        assert_eq!(both(&path, "device-a"), (None, None), "missing file");
+
+        write_identity_cache(&path, &entry("device-a", 12345, 3), 0o600);
+        assert_eq!(both(&path, "device-a"), (Some(12345), Some(12345)));
+        assert_eq!(cached_user_id(&path, "device-a", Some(&other_hash)), None);
+        assert_eq!(both(&path, "device-b"), (None, None), "another machine");
+
+        // An id that does not hash to the account is rejected once the account
+        // is known; the UUID-only lookup still trusts any positive id.
+        write_identity_cache(&path, &entry("device-a", 999, 3), 0o600);
+        assert_eq!(both(&path, "device-a"), (None, Some(999)));
+
+        write_identity_cache(&path, &entry("device-a", 0, 3), 0o600);
+        assert_eq!(both(&path, "device-a"), (None, None), "non-positive id");
+
+        write_identity_cache(&path, &entry("device-a", 12345, 2), 0o600);
+        assert_eq!(
+            both(&path, "device-a"),
+            (None, None),
+            "other schema version"
+        );
+
+        std::fs::write(&path, b"{not json").expect("write malformed entry");
+        assert_eq!(both(&path, "device-a"), (None, None), "malformed entry");
+
+        #[cfg(unix)]
+        {
+            write_identity_cache(&path, &entry("device-a", 12345, 3), 0o644);
+            assert_eq!(
+                both(&path, "device-a"),
+                (None, None),
+                "group/world readable"
+            );
+
+            write_identity_cache(&path, &entry("device-a", 12345, 3), 0o600);
+            let link = dir.path().join("linked-identity.json");
+            std::os::unix::fs::symlink(&path, &link).expect("symlink cache entry");
+            assert_eq!(both(&link, "device-a"), (None, None), "symlinked entry");
+        }
     }
 
     #[test]
