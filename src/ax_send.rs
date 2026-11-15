@@ -3328,11 +3328,15 @@ mod imp {
     /// deliberately left unconfirmed rather than used to trigger a retry.
     fn composer_text(field: &AXUIElement) -> Option<String> {
         let value_attr: AXAttribute<CFType> = AXAttribute::new(&CFString::new("AXValue"));
-        field
-            .attribute(&value_attr)
-            .ok()
-            .and_then(|value| value.downcast::<CFString>())
-            .and_then(|value| cf_string_lossy(&value))
+        match field.attribute(&value_attr) {
+            Ok(value) => value
+                .downcast::<CFString>()
+                .and_then(|value| cf_string_lossy(&value)),
+            // An empty text field can answer AXValue with "no value" instead of
+            // an empty string; the composer guard needs that read as empty.
+            Err(AccessibilityError::Ax(code)) if code == kAXErrorNoValue => Some(String::new()),
+            Err(_) => None,
+        }
     }
 
     /// Type `text` into the focused field by posting one keyboard CGEvent pair
