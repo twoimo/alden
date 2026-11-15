@@ -8,6 +8,14 @@
   compare <base> <file>... [--base-mod tests] [--mod tests] [--show]
                                    report which items in <file> match the
                                    same-named item in <base> verbatim
+  extract-arm <main.rs> <dst> VARIANT PATH FN [--param 'name: Type[=expr]']...
+                                   turn the `Commands::VARIANT { .. } => { body }`
+                                   arm of main() into `pub fn FN` in <dst>,
+                                   typed from the `enum Commands` fields, and
+                                   replace the arm with a call through PATH
+  compare-arm <base-main.rs> <file> VARIANT FN [--show]
+                                   check FN equals rustfmt of the original arm
+                                   body wrapped in FN's signature
 
 An item spans from the line after the previous item ends through its own
 closing `}` or `;`, so doc comments and attributes travel with it. Moving a
@@ -21,7 +29,9 @@ not re-indented, so run rustfmt on the destination afterwards.
 import argparse
 import difflib
 import re
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 HEADER = re.compile(
@@ -239,6 +249,79 @@ def cmd_compare(args):
         print(f"  {item}")
 
 
+def variant_fields(lines, variant):
+    start = lines.index("enum Commands {\n")
+    at = next(i for i in range(start, len(lines)) if re.match(rf"^    {variant}\b", lines[i]))
+    fields = {}
+    if lines[at].rstrip().endswith("{"):
+        for line in lines[at + 1 :]:
+            if line.rstrip() == "    },":
+                break
+            field = re.match(r"^        ([a-z_][a-z0-9_]*): (.+),$", line)
+            if field:
+                fields[field.group(1)] = field.group(2)
+    return fields
+
+
+def cmd_extract_arm(args):
+    src = Path(args.src)
+    lines = src.read_text().splitlines(keepends=True)
+    fields = variant_fields(lines, args.variant)
+    main_at = lines.index("fn main() -> Result<()> {\n")
+    start = next(i for i in range(main_at, len(lines)) if re.match(rf"^        Commands::{args.variant}\b", lines[i]))
+    open_at = next(i for i in range(start, len(lines)) if lines[i].rstrip().endswith("=> {"))
+    close_at = next(i for i in range(open_at + 1, len(lines)) if lines[i].rstrip("\n") == "        }")
+    pattern = "".join(lines[start : open_at + 1])
+    bound = [
+        name
+        for name in re.findall(r"\b([a-z_][a-z0-9_]*)\b(?!\s*:\s*_)", pattern.split("{", 1)[1].rsplit("}", 1)[0])
+        if name in fields
+    ]
+    params = [f"{name}: {fields[name]}" for name in bound]
+    call_args = list(bound)
+    for extra in args.param:
+        decl, _, expr = extra.partition("=")
+        params.append(decl.strip())
+        call_args.append(expr.strip() or decl.split(":", 1)[0].strip())
+    body = "".join(lines[open_at + 1 : close_at])
+    func = f"pub fn {args.fn}({', '.join(params)}) -> Result<()> {{\n{body}    Ok(())\n}}\n"
+    call = f"{args.path}::{args.fn}({', '.join(call_args)})?,\n"
+    head = pattern.rstrip()[: -len("{")]
+    lines[start : close_at + 1] = [head + call]
+    src.write_text("".join(lines))
+    insert_into(Path(args.dst), func, None)
+    print(f"extracted {args.variant} ({close_at - open_at - 1} body lines) into {args.dst}::{args.fn}")
+
+
+def arm_body(lines, variant):
+    main_at = lines.index("fn main() -> Result<()> {\n")
+    start = next(i for i in range(main_at, len(lines)) if re.match(rf"^        Commands::{variant}\b", lines[i]))
+    open_at = next(i for i in range(start, len(lines)) if lines[i].rstrip().endswith("=> {"))
+    close_at = next(i for i in range(open_at + 1, len(lines)) if lines[i].rstrip("\n") == "        }")
+    return "".join(lines[open_at + 1 : close_at])
+
+
+def cmd_compare_arm(args):
+    base_lines = Path(args.base).read_text().splitlines(keepends=True)
+    texts = chunk_texts(args.file, None).get(args.fn)
+    if not texts:
+        sys.exit(f"{args.fn} not found in {args.file}")
+    signature = texts[0].split("{", 1)[0]
+    candidate = signature + "{\n" + arm_body(base_lines, args.variant) + "    Ok(())\n}\n"
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "arm.rs"
+        path.write_text(candidate)
+        subprocess.run(["rustfmt", "--edition", "2021", str(path)], check=True)
+        expected = path.read_text().strip("\n")
+    if expected == texts[0]:
+        print(f"{args.variant} -> {args.fn}: body verbatim (rustfmt of the original arm)")
+        return
+    print(f"{args.variant} -> {args.fn}: body CHANGED")
+    if args.show:
+        print("\n".join(difflib.unified_diff(expected.splitlines(), texts[0].splitlines(), lineterm="")))
+    sys.exit(1)
+
+
 def main():
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -257,8 +340,28 @@ def main():
     p_cmp.add_argument("--base-mod")
     p_cmp.add_argument("--mod")
     p_cmp.add_argument("--show", action="store_true")
+    p_arm = sub.add_parser("extract-arm")
+    p_arm.add_argument("src")
+    p_arm.add_argument("dst")
+    p_arm.add_argument("variant")
+    p_arm.add_argument("path", help="module path the call site uses, e.g. commands::context")
+    p_arm.add_argument("fn")
+    p_arm.add_argument("--param", action="append", default=[], help="'name: Type[=call expr]'")
+    p_carm = sub.add_parser("compare-arm")
+    p_carm.add_argument("base")
+    p_carm.add_argument("file")
+    p_carm.add_argument("variant")
+    p_carm.add_argument("fn")
+    p_carm.add_argument("--show", action="store_true")
     args = parser.parse_args()
-    {"list": cmd_list, "move": cmd_move, "compare": cmd_compare}[args.cmd](args)
+    commands = {
+        "list": cmd_list,
+        "move": cmd_move,
+        "compare": cmd_compare,
+        "extract-arm": cmd_extract_arm,
+        "compare-arm": cmd_compare_arm,
+    }
+    commands[args.cmd](args)
 
 
 if __name__ == "__main__":
