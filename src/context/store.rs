@@ -17,6 +17,13 @@ pub fn default_db_path() -> PathBuf {
     base.join("openkakao").join("context.sqlite3")
 }
 
+/// Apply the additive context/FTS/live-index migrations without ingesting or
+/// deleting any context rows. Safe to call before a first sync state lookup.
+pub fn ensure_live_context_schema(db_path: &Path) -> Result<()> {
+    let _ = open_db(db_path)?;
+    Ok(())
+}
+
 /// How long a context-DB connection waits for a competing writer before
 /// failing with SQLITE_BUSY.
 ///

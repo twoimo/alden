@@ -7,7 +7,6 @@ use super::response_time::{
     fit_response_time_distribution, response_time_distribution_is_valid, ResponseTimeDistribution,
     RESPONSE_TIME_DISTRIBUTION_SCHEMA_VERSION,
 };
-use super::store::open_db;
 use super::style::{
     classify_style_message, insert_style_profile, StyleProfileAccumulator, STYLE_POLICY_VERSION,
     STYLE_USER,
@@ -18,7 +17,6 @@ use chrono::Utc;
 use rusqlite::{params, Connection, OptionalExtension};
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
-use std::path::Path;
 
 pub(super) const RETRIEVAL_INDEX_SCHEMA_VERSION: &str = "2";
 
@@ -26,13 +24,6 @@ pub(super) const CONTEXT_RETRIEVAL_MIGRATION_REQUIRED: &str =
     "context retrieval index migration required; run context-index";
 
 pub(super) const LIVE_CONTEXT_SCHEMA_VERSION: &str = "2";
-
-/// Apply the additive context/FTS/live-index migrations without ingesting or
-/// deleting any context rows. Safe to call before a first sync state lookup.
-pub fn ensure_live_context_schema(db_path: &Path) -> Result<()> {
-    let _ = open_db(db_path)?;
-    Ok(())
-}
 
 /// Rename legacy `choi_yeonwoo_*` style tables to their `owner_*` names when an
 /// older database is opened, so its data survives the owner-scope
