@@ -1307,52 +1307,15 @@ impl LinkForwarder<'_> {
         start: i64,
     ) -> RoomDelivery {
         // Already forwarded — zero new sends (R6.7).
-        if self.ledger.is_delivered(room.chat_id, link_key) {
-            self.journal_event(
-                link_key,
-                Stage::PreSend,
-                StageStatus::Success,
-                "forward_already",
-                start,
-                Some(source_images as u32),
-                Some(0),
-            );
-            return RoomDelivery {
-                chat_id: room.chat_id,
-                room_title: room.title.clone(),
-                result: DeliveryResult::AlreadyDelivered,
-            };
-        }
-
-        let result =
+        let result = if self.ledger.is_delivered(room.chat_id, link_key) {
+            DeliveryResult::AlreadyDelivered
+        } else {
             match self
                 .sender
                 .send_forward(room.chat_id, &message.render(), &message.images)
             {
-                RoomSendOutcome::Fenced { reason } => {
-                    self.journal_event(
-                        link_key,
-                        Stage::Authorize,
-                        StageStatus::Failed,
-                        "forward_fenced",
-                        start,
-                        Some(source_images as u32),
-                        Some(0),
-                    );
-                    DeliveryResult::Fenced { reason }
-                }
-                RoomSendOutcome::Failed { code } => {
-                    self.journal_event(
-                        link_key,
-                        Stage::Commit,
-                        StageStatus::Failed,
-                        "forward_failed",
-                        start,
-                        Some(source_images as u32),
-                        Some(0),
-                    );
-                    DeliveryResult::Failed { code }
-                }
+                RoomSendOutcome::Fenced { reason } => DeliveryResult::Fenced { reason },
+                RoomSendOutcome::Failed { code } => DeliveryResult::Failed { code },
                 RoomSendOutcome::Sent { images_delivered } => {
                     let images = ImageTally {
                         source: source_images,
@@ -1363,28 +1326,10 @@ impl LinkForwarder<'_> {
                         let _ = self
                             .ledger
                             .mark(room.chat_id, link_key, self.clock.now_ms());
-                        self.journal_event(
-                            link_key,
-                            Stage::Commit,
-                            StageStatus::Success,
-                            "forward_sent",
-                            start,
-                            Some(source_images as u32),
-                            Some(images_delivered as u32),
-                        );
                         DeliveryResult::Sent { images }
                     } else {
                         // Image-count mismatch is a partial failure: do NOT mark, so
                         // the combination stays retryable (R6.6).
-                        self.journal_event(
-                            link_key,
-                            Stage::Commit,
-                            StageStatus::Failed,
-                            "forward_partial",
-                            start,
-                            Some(source_images as u32),
-                            Some(images_delivered as u32),
-                        );
                         DeliveryResult::PartialFailure {
                             miss_reasons: miss_reasons(
                                 source_images,
@@ -1396,8 +1341,19 @@ impl LinkForwarder<'_> {
                         }
                     }
                 }
-            };
+            }
+        };
 
+        let (stage, status, result_code, delivered) = delivery_journal_record(&result);
+        self.journal_event(
+            link_key,
+            stage,
+            status,
+            result_code,
+            start,
+            Some(source_images as u32),
+            Some(delivered as u32),
+        );
         RoomDelivery {
             chat_id: room.chat_id,
             room_title: room.title.clone(),
@@ -1451,6 +1407,32 @@ impl LinkForwarder<'_> {
         let _ = self
             .journal
             .append_with_images(event, images_source, images_delivered);
+    }
+}
+
+/// The journal stage, status, result code, and delivered-image count recorded
+/// for one room's delivery result (R6.11).
+fn delivery_journal_record(result: &DeliveryResult) -> (Stage, StageStatus, &'static str, usize) {
+    match result {
+        DeliveryResult::AlreadyDelivered => {
+            (Stage::PreSend, StageStatus::Success, "forward_already", 0)
+        }
+        DeliveryResult::Fenced { .. } => {
+            (Stage::Authorize, StageStatus::Failed, "forward_fenced", 0)
+        }
+        DeliveryResult::Failed { .. } => (Stage::Commit, StageStatus::Failed, "forward_failed", 0),
+        DeliveryResult::Sent { images } => (
+            Stage::Commit,
+            StageStatus::Success,
+            "forward_sent",
+            images.delivered,
+        ),
+        DeliveryResult::PartialFailure { images, .. } => (
+            Stage::Commit,
+            StageStatus::Failed,
+            "forward_partial",
+            images.delivered,
+        ),
     }
 }
 
