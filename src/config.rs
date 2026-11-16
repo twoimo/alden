@@ -652,6 +652,40 @@ mod tests {
     }
 
     #[test]
+    fn auto_reply_startup_accepts_the_flash_next_sushi_model_only_by_exact_id() {
+        let mut config = OpenKakaoConfig::default();
+        config.safety.allow_auto_reply = true;
+        config.safety.allow_ax_send = true;
+        config.model.privacy_mode = Some("local".into());
+        config.model.provider = Some(MLX_SERVE_PROVIDER.into());
+        config.auto_reply.reply_runner_kind = Some("opencodex".into());
+        config.auto_reply.self_nickname = Some("self".into());
+        config.auto_reply.reply_authors = vec!["author".into()];
+        config.safety.allowed_send_chats = vec!["room".into()];
+        for model in [
+            "beamster/Qwen3.8-Flash-Next-Sushi-2bpw",
+            "mlx/beamster/Qwen3.8-Flash-Next-Sushi-2bpw",
+        ] {
+            config.auto_reply.reply_model = Some(model.into());
+            assert!(
+                validate_auto_reply_startup(&config, &["room".into()], &[1]).is_ok(),
+                "{model} must pass startup validation"
+            );
+        }
+        for model in [
+            "ddalcu/Qwen3.6-35B-A3B-MLX-Serve-4bit",
+            "mlx/ddalcu/Qwen3.6-35B-A3B-MLX-Serve-4bit",
+            "beamster/Qwen3.8-Flash-Next-Sushi-4bpw",
+        ] {
+            config.auto_reply.reply_model = Some(model.into());
+            assert!(
+                validate_auto_reply_startup(&config, &["room".into()], &[1]).is_err(),
+                "{model} must fail startup validation"
+            );
+        }
+    }
+
+    #[test]
     fn allowed_send_chat_targets_matches_allowlist_and_catalog_policy() {
         let mut config = OpenKakaoConfig::default();
         config.safety.allowed_send_chats = vec!["Vision AI 경진대회".into()];

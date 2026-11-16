@@ -423,6 +423,101 @@ class AutoReplyWorkerMlxTests(unittest.TestCase):
             http_runner.assert_not_called()
             process_runner.assert_not_called()
 
+    SUSHI_MODEL_ID = "beamster/Qwen3.8-Flash-Next-Sushi-2bpw"
+    QWEN36_35B_MODEL_ID = "ddalcu/Qwen3.6-35B-A3B-MLX-Serve-4bit"
+
+    def _run_sushi_candidate(self, model, completion, *, image_paths=None):
+        module = self.module
+        calls = []
+        payloads = []
+
+        def fake_urlopen(request, timeout=None):
+            del timeout
+            calls.append(request.full_url)
+            if request.full_url == "http://127.0.0.1:11234/v1/models":
+                return _Response(
+                    {
+                        "data": [
+                            {
+                                "id": self.QWEN36_35B_MODEL_ID,
+                                "owned_by": "mlx-serve",
+                                "loaded": True,
+                                "state": "ready",
+                            },
+                            {
+                                "id": self.SUSHI_MODEL_ID,
+                                "owned_by": "mlx-serve",
+                                "loaded": True,
+                                "state": "ready",
+                            },
+                        ]
+                    }
+                )
+            if request.full_url == "http://127.0.0.1:11234/v1/chat/completions":
+                payloads.append(json.loads(request.data.decode("utf-8")))
+                return _Response(completion)
+            raise AssertionError(f"unexpected URL: {request.full_url}")
+
+        with (
+            mock.patch.object(module, "REPLY_RUNNER_KIND", "opencodex"),
+            mock.patch("auto_reply_ondevice._local_only_urlopen", side_effect=fake_urlopen),
+            mock.patch("urllib.request.urlopen") as direct_urlopen,
+        ):
+            result = module._run_generation_candidate(
+                model,
+                "system",
+                b'{"inbound":"hello"}',
+                command=["opencodex"],
+                env={},
+                model_stdin_bytes=None,
+                image_paths=image_paths,
+                timeout=90.0,
+            )
+        direct_urlopen.assert_not_called()
+        return result, calls, payloads
+
+    def test_flash_next_sushi_is_a_local_text_reply_model(self):
+        module = self.module
+        answered = {
+            "model": self.SUSHI_MODEL_ID,
+            "choices": [{"message": {"content": "ok"}}],
+        }
+        for selected_model in (self.SUSHI_MODEL_ID, f"mlx/{self.SUSHI_MODEL_ID}"):
+            with self.subTest(selected_model=selected_model):
+                result, _calls, payloads = self._run_sushi_candidate(selected_model, answered)
+                self.assertEqual(result, (0, b"ok", b""))
+                self.assertEqual([payload["model"] for payload in payloads], [self.SUSHI_MODEL_ID])
+
+                result, calls, _payloads = self._run_sushi_candidate(
+                    selected_model, answered, image_paths=[Path("photo.png")]
+                )
+                self.assertEqual(result, (1, b"", b"local_vision_model_required"))
+                self.assertEqual(calls, [])
+
+        with mock.patch.object(module, "REPLY_MODEL", self.SUSHI_MODEL_ID):
+            self.assertEqual(module._active_reply_model(), self.SUSHI_MODEL_ID)
+
+    def test_flash_next_sushi_rejects_an_answer_from_another_model(self):
+        result, _calls, _payloads = self._run_sushi_candidate(
+            self.SUSHI_MODEL_ID,
+            {
+                "model": self.QWEN36_35B_MODEL_ID,
+                "choices": [{"message": {"content": "ok"}}],
+            },
+        )
+        self.assertEqual(result, (1, b"", b"mlx_serve_response_model_mismatch"))
+
+    def test_unlisted_local_model_stays_refused(self):
+        module = self.module
+        result, calls, _payloads = self._run_sushi_candidate(
+            self.QWEN36_35B_MODEL_ID,
+            {"choices": [{"message": {"content": "ok"}}]},
+        )
+        self.assertEqual(result, (1, b"", b"product_cloud_fallback_disabled"))
+        self.assertEqual(calls, [])
+        with mock.patch.object(module, "REPLY_MODEL", self.QWEN36_35B_MODEL_ID):
+            self.assertEqual(module._active_reply_model(), module.FLASH_NEXT_MODEL_ID)
+
     def test_prefixless_mlx_keeps_local_generation_timeout(self):
         module = self.module
         prefixless = "ddalcu/Qwen3.8-Flash-Next-MLX-Serve-mixed-4-8bit"

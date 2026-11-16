@@ -436,6 +436,85 @@ fn auto_reply_local_mlx_probe_fails_closed_without_generation_or_remote_fallback
     assert!(invalid_profile.requests.borrow().is_empty());
 }
 
+const FLASH_NEXT_SUSHI_MODEL_ID: &str = "beamster/Qwen3.8-Flash-Next-Sushi-2bpw";
+const QWEN36_35B_MODEL_ID: &str = "ddalcu/Qwen3.6-35B-A3B-MLX-Serve-4bit";
+
+#[test]
+fn auto_reply_flash_next_sushi_model_keeps_its_identity_through_startup() {
+    for requested in [
+        FLASH_NEXT_SUSHI_MODEL_ID.to_owned(),
+        format!("mlx/{FLASH_NEXT_SUSHI_MODEL_ID}"),
+    ] {
+        let mut config = config::OpenKakaoConfig::default();
+        let choice = select_auto_reply_llm(&mut config, Some(&requested), true)
+            .expect("the Sushi model is an allowlisted local reply model");
+        assert!(choice.label().contains("Flash-Next"), "{}", choice.label());
+        choice.apply(&mut config);
+        assert_eq!(
+            config.auto_reply.reply_model.as_deref(),
+            Some(FLASH_NEXT_SUSHI_MODEL_ID)
+        );
+        config::validate_auto_reply_local_mlx_profile(&config)
+            .expect("the Sushi model passes the local MLX profile");
+
+        let transport = FakeLocalMlxProbeTransport::new(vec![
+            FakeLocalMlxProbeTransport::json(
+                200,
+                serde_json::json!({
+                    "data": [
+                        {"id": QWEN36_35B_MODEL_ID, "loaded": true, "state": "ready"},
+                        {"id": FLASH_NEXT_SUSHI_MODEL_ID, "loaded": true, "state": "ready"}
+                    ]
+                }),
+            ),
+            FakeLocalMlxProbeTransport::json(
+                200,
+                serde_json::json!({"choices": [{"message": {"content": "확인"}}]}),
+            ),
+        ]);
+        probe_auto_reply_llm_with_local_transport(&config, choice, &transport)
+            .expect("an advertised, ready Sushi model passes the probe");
+        let requests = transport.requests.borrow();
+        let generation: serde_json::Value =
+            serde_json::from_slice(requests[1].body.as_deref().expect("generation probe body"))
+                .expect("parse generation probe body");
+        assert_eq!(
+            generation.get("model").and_then(serde_json::Value::as_str),
+            Some(FLASH_NEXT_SUSHI_MODEL_ID)
+        );
+    }
+}
+
+#[test]
+fn auto_reply_refuses_local_models_outside_the_allowlist() {
+    for model in [
+        QWEN36_35B_MODEL_ID.to_owned(),
+        format!("mlx/{QWEN36_35B_MODEL_ID}"),
+        format!("mlx/mlx/{FLASH_NEXT_SUSHI_MODEL_ID}"),
+        FLASH_NEXT_SUSHI_MODEL_ID.to_lowercase(),
+        FLASH_NEXT_SUSHI_MODEL_ID.replace("2bpw", "4bpw"),
+    ] {
+        let mut config = config::OpenKakaoConfig::default();
+        assert!(
+            select_auto_reply_llm(&mut config, Some(&model), true).is_err(),
+            "{model} must not be selectable"
+        );
+
+        let choice =
+            select_auto_reply_llm(&mut config, Some(config::MLX_FLASH_NEXT_MODEL_ID), true)
+                .expect("the MLX-Serve Flash-Next model is allowlisted");
+        choice.apply(&mut config);
+        config.auto_reply.reply_model = Some(model.clone());
+        assert!(
+            config::validate_auto_reply_local_mlx_profile(&config).is_err(),
+            "{model} must fail the local MLX profile"
+        );
+        let transport = FakeLocalMlxProbeTransport::new(Vec::new());
+        assert!(probe_auto_reply_llm_with_local_transport(&config, choice, &transport).is_err());
+        assert!(transport.requests.borrow().is_empty());
+    }
+}
+
 #[test]
 fn auto_reply_local_mlx_transport_rejects_non_fixed_endpoints_before_network() {
     for url in [
