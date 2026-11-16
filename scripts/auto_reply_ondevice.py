@@ -39,7 +39,15 @@ from local_mlx_gateway import (
 
 MLX_GATEWAY_CANDIDATES = (MLX_GATEWAY_BASE_URL,)
 FLASH_NEXT_MODEL_ID = "mlx/ddalcu/Qwen3.8-Flash-Next-MLX-Serve-mixed-4-8bit"
+FLASH_NEXT_SUSHI_MODEL_ID = "mlx/beamster/Qwen3.8-Flash-Next-Sushi-2bpw"
 QWEN38_27B_MODEL_ID = "mlx/ddalcu/Qwen3.8-27B-MLX-Serve-4bit"
+FLASH_NEXT_FAMILY = "Qwen3.8-Flash-Next"
+QWEN38_27B_FAMILY = "Qwen3.8-27B"
+LOCAL_REPLY_MODEL_FAMILIES = {
+    FLASH_NEXT_MODEL_ID: FLASH_NEXT_FAMILY,
+    FLASH_NEXT_SUSHI_MODEL_ID: FLASH_NEXT_FAMILY,
+    QWEN38_27B_MODEL_ID: QWEN38_27B_FAMILY,
+}
 QWEN38_27B_DEFAULT_LOADED = False
 PROBE_TIMEOUT_SECONDS = 45.0
 PROBE_HARD_TIMEOUT_SECONDS = 90.0
@@ -562,10 +570,19 @@ class ModelResidencyManager:
         return ModelSwapResult(True, target_model, SwapStage.READY, "ready", tuple(stages))
 
 
-def _canonical_managed_model_id(value: Any) -> str:
+def canonical_local_reply_model_id(value: Any) -> str:
     candidate = str(value or "").strip()
     if candidate and not candidate.startswith("mlx/"):
         candidate = f"mlx/{candidate}"
+    return candidate if candidate in LOCAL_REPLY_MODEL_FAMILIES else ""
+
+
+def local_reply_model_family(value: Any) -> str:
+    return LOCAL_REPLY_MODEL_FAMILIES.get(canonical_local_reply_model_id(value), "")
+
+
+def _canonical_managed_model_id(value: Any) -> str:
+    candidate = canonical_local_reply_model_id(value)
     if candidate in {FLASH_NEXT_MODEL_ID, QWEN38_27B_MODEL_ID}:
         return candidate
     return ""

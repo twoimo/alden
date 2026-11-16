@@ -7,11 +7,45 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
 pub(crate) const MLX_FLASH_NEXT_MODEL_ID: &str = "ddalcu/Qwen3.8-Flash-Next-MLX-Serve-mixed-4-8bit";
-pub(crate) const MLX_FLASH_NEXT_PREFIXED_MODEL_ID: &str =
-    "mlx/ddalcu/Qwen3.8-Flash-Next-MLX-Serve-mixed-4-8bit";
+pub(crate) const MLX_FLASH_NEXT_SUSHI_MODEL_ID: &str = "beamster/Qwen3.8-Flash-Next-Sushi-2bpw";
 pub(crate) const MLX_27B_MODEL_ID: &str = "ddalcu/Qwen3.8-27B-MLX-Serve-4bit";
-pub(crate) const MLX_27B_PREFIXED_MODEL_ID: &str = "mlx/ddalcu/Qwen3.8-27B-MLX-Serve-4bit";
 pub(crate) const MLX_SERVE_PROVIDER: &str = "mlx-serve";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LocalMlxFamily {
+    FlashNext,
+    TwentySevenB,
+}
+
+impl LocalMlxFamily {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::FlashNext => "Qwen3.8 Flash-Next",
+            Self::TwentySevenB => "Qwen3.8 27B",
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct LocalMlxModel {
+    pub(crate) id: &'static str,
+    pub(crate) family: LocalMlxFamily,
+}
+
+pub(crate) const LOCAL_MLX_MODELS: [LocalMlxModel; 3] = [
+    LocalMlxModel {
+        id: MLX_FLASH_NEXT_MODEL_ID,
+        family: LocalMlxFamily::FlashNext,
+    },
+    LocalMlxModel {
+        id: MLX_FLASH_NEXT_SUSHI_MODEL_ID,
+        family: LocalMlxFamily::FlashNext,
+    },
+    LocalMlxModel {
+        id: MLX_27B_MODEL_ID,
+        family: LocalMlxFamily::TwentySevenB,
+    },
+];
 
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct OpenKakaoConfig {
@@ -284,14 +318,9 @@ pub fn validate_model_privacy(config: &OpenKakaoConfig) -> Result<()> {
     }
 }
 
-pub(crate) fn canonical_mlx_local_model(model: Option<&str>) -> Option<&'static str> {
-    match model {
-        Some(MLX_FLASH_NEXT_MODEL_ID | MLX_FLASH_NEXT_PREFIXED_MODEL_ID) => {
-            Some(MLX_FLASH_NEXT_MODEL_ID)
-        }
-        Some(MLX_27B_MODEL_ID | MLX_27B_PREFIXED_MODEL_ID) => Some(MLX_27B_MODEL_ID),
-        _ => None,
-    }
+pub(crate) fn local_mlx_model(model: &str) -> Option<&'static LocalMlxModel> {
+    let id = model.strip_prefix("mlx/").unwrap_or(model);
+    LOCAL_MLX_MODELS.iter().find(|entry| entry.id == id)
 }
 
 pub(crate) fn validate_auto_reply_local_mlx_profile(config: &OpenKakaoConfig) -> Result<()> {
@@ -308,9 +337,15 @@ pub(crate) fn validate_auto_reply_local_mlx_profile(config: &OpenKakaoConfig) ->
             "local MLX AutoReply requires reply_runner_kind=opencodex as its validated transport placeholder"
         );
     }
-    if canonical_mlx_local_model(config.auto_reply.reply_model.as_deref()).is_none() {
+    if config
+        .auto_reply
+        .reply_model
+        .as_deref()
+        .and_then(local_mlx_model)
+        .is_none()
+    {
         anyhow::bail!(
-            "local MLX AutoReply requires the exact Qwen3.8 Flash-Next or Qwen3.8 27B MLX-Serve model ID"
+            "local MLX AutoReply requires the exact ID of an allowed Qwen3.8 Flash-Next or Qwen3.8 27B model"
         );
     }
     Ok(())
@@ -833,7 +868,7 @@ mod tests {
         config.auto_reply.reply_model = Some(MLX_FLASH_NEXT_MODEL_ID.into());
         assert!(validate_auto_reply_local_mlx_profile(&config).is_ok());
 
-        config.auto_reply.reply_model = Some(MLX_FLASH_NEXT_PREFIXED_MODEL_ID.into());
+        config.auto_reply.reply_model = Some(format!("mlx/{MLX_FLASH_NEXT_MODEL_ID}"));
         assert!(validate_auto_reply_local_mlx_profile(&config).is_ok());
 
         config.auto_reply.reply_model = Some("google-antigravity/gemini-3.8-flash".into());

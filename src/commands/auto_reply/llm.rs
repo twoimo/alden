@@ -12,29 +12,28 @@ use crate::config;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum AutoReplyLlmChoice {
-    MlxQwen38FlashNext,
-    MlxQwen38TwentySevenB,
+    LocalMlx(&'static config::LocalMlxModel),
     GjcGemini37Flash,
     GjcOpencodeDeepseek41Flash,
     CodexGpt56Luna,
 }
 
 impl AutoReplyLlmChoice {
-    pub(super) fn all() -> [Self; 5] {
-        [
-            Self::MlxQwen38FlashNext,
-            Self::MlxQwen38TwentySevenB,
-            Self::GjcGemini37Flash,
-            Self::GjcOpencodeDeepseek41Flash,
-            Self::CodexGpt56Luna,
-        ]
+    pub(super) fn all() -> Vec<Self> {
+        config::LOCAL_MLX_MODELS
+            .iter()
+            .map(Self::LocalMlx)
+            .chain([
+                Self::GjcGemini37Flash,
+                Self::GjcOpencodeDeepseek41Flash,
+                Self::CodexGpt56Luna,
+            ])
+            .collect()
     }
 
     pub(super) fn from_model(model: &str) -> Option<Self> {
-        match config::canonical_mlx_local_model(Some(model)) {
-            Some(config::MLX_FLASH_NEXT_MODEL_ID) => return Some(Self::MlxQwen38FlashNext),
-            Some(config::MLX_27B_MODEL_ID) => return Some(Self::MlxQwen38TwentySevenB),
-            _ => {}
+        if let Some(local) = config::local_mlx_model(model) {
+            return Some(Self::LocalMlx(local));
         }
         match model.trim() {
             "google-antigravity/gemini-3.8-flash"
@@ -58,20 +57,18 @@ impl AutoReplyLlmChoice {
         }
     }
 
-    pub(super) fn label(self) -> &'static str {
+    pub(super) fn label(self) -> String {
         match self {
-            Self::MlxQwen38FlashNext => "Local MLX Qwen3.8 Flash-Next",
-            Self::MlxQwen38TwentySevenB => "Local MLX Qwen3.8 27B",
-            Self::GjcGemini37Flash => "Gajae-Code Gemini 3.7 Flash (high)",
-            Self::GjcOpencodeDeepseek41Flash => "OpenCode Go DeepSeek V4.1 Flash",
-            Self::CodexGpt56Luna => "Codex GPT-5.6 Luna",
+            Self::LocalMlx(local) => format!("Local MLX {} ({})", local.family.label(), local.id),
+            Self::GjcGemini37Flash => "Gajae-Code Gemini 3.7 Flash (high)".into(),
+            Self::GjcOpencodeDeepseek41Flash => "OpenCode Go DeepSeek V4.1 Flash".into(),
+            Self::CodexGpt56Luna => "Codex GPT-5.6 Luna".into(),
         }
     }
 
     pub(super) fn model(self) -> &'static str {
         match self {
-            Self::MlxQwen38FlashNext => config::MLX_FLASH_NEXT_MODEL_ID,
-            Self::MlxQwen38TwentySevenB => config::MLX_27B_MODEL_ID,
+            Self::LocalMlx(local) => local.id,
             Self::GjcGemini37Flash => "google-antigravity/gemini-3.7-flash-tiered",
             Self::GjcOpencodeDeepseek41Flash => "opencode-go-session/deepseek-v4.1-flash",
             Self::CodexGpt56Luna => "gpt-5.6-luna",
@@ -79,7 +76,7 @@ impl AutoReplyLlmChoice {
     }
 
     pub(super) fn apply(self, config: &mut config::OpenKakaoConfig) {
-        if matches!(self, Self::MlxQwen38FlashNext | Self::MlxQwen38TwentySevenB) {
+        if matches!(self, Self::LocalMlx(_)) {
             config.model.privacy_mode = Some("local".into());
             config.model.allow_egress = false;
             config.model.provider = Some(config::MLX_SERVE_PROVIDER.into());
@@ -107,8 +104,7 @@ impl AutoReplyLlmChoice {
             return;
         }
         match self {
-            Self::MlxQwen38FlashNext => unreachable!("local MLX choice returns above"),
-            Self::MlxQwen38TwentySevenB => unreachable!("local MLX choice returns above"),
+            Self::LocalMlx(_) => unreachable!("local MLX choice returns above"),
             Self::GjcGemini37Flash | Self::GjcOpencodeDeepseek41Flash => {
                 config.model.privacy_mode = Some("remote_explicit".into());
                 config.model.allow_egress = true;
@@ -170,7 +166,7 @@ pub(super) fn select_auto_reply_llm(
     let items = AutoReplyLlmChoice::all()
         .into_iter()
         .map(|choice| crate::util::ArrowMenuItem {
-            label: choice.label().to_owned(),
+            label: choice.label(),
             value: choice.model().to_owned(),
         })
         .collect::<Vec<_>>();
@@ -298,7 +294,11 @@ fn probe_local_mlx_auto_reply(
     transport: &dyn LocalMlxProbeTransport,
 ) -> Result<()> {
     config::validate_auto_reply_local_mlx_profile(config)?;
-    let model = config::canonical_mlx_local_model(config.auto_reply.reply_model.as_deref())
+    let model = config
+        .auto_reply
+        .reply_model
+        .as_deref()
+        .and_then(config::local_mlx_model)
         .context("local MLX AutoReply model is not allowlisted")?;
 
     let models = parse_local_mlx_probe_json(
@@ -327,7 +327,7 @@ fn probe_local_mlx_auto_reply(
             .get("id")
             .and_then(serde_json::Value::as_str)
             .context("local MLX models probe row has no model ID")?;
-        if config::canonical_mlx_local_model(Some(row_id)) == Some(model) {
+        if config::local_mlx_model(row_id) == Some(model) {
             if target.is_some() {
                 anyhow::bail!("local MLX models probe returned an ambiguous model");
             }
@@ -342,7 +342,7 @@ fn probe_local_mlx_auto_reply(
     }
 
     let body = serde_json::to_vec(&serde_json::json!({
-        "model": model,
+        "model": model.id,
         "messages": [{"role": "user", "content": "확인이라고만 답하세요."}],
         "max_tokens": 8,
         "temperature": 0,
@@ -389,10 +389,7 @@ pub(super) fn probe_auto_reply_llm_with_local_transport(
     choice: AutoReplyLlmChoice,
     local_transport: &dyn LocalMlxProbeTransport,
 ) -> Result<()> {
-    if matches!(
-        choice,
-        AutoReplyLlmChoice::MlxQwen38FlashNext | AutoReplyLlmChoice::MlxQwen38TwentySevenB
-    ) {
+    if matches!(choice, AutoReplyLlmChoice::LocalMlx(_)) {
         return probe_local_mlx_auto_reply(config, local_transport);
     }
 
@@ -442,10 +439,7 @@ pub(super) fn probe_auto_reply_llm_with_local_transport(
         anyhow::bail!("opencodex runner failed probe: {}", stdout.trim());
     }
     match choice {
-        AutoReplyLlmChoice::MlxQwen38FlashNext => {
-            unreachable!("local MLX choice returns before remote probes")
-        }
-        AutoReplyLlmChoice::MlxQwen38TwentySevenB => {
+        AutoReplyLlmChoice::LocalMlx(_) => {
             unreachable!("local MLX choice returns before remote probes")
         }
         AutoReplyLlmChoice::GjcGemini37Flash => {
