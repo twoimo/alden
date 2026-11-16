@@ -1707,11 +1707,14 @@ fn main() -> Result<()> {
             commands::local_send::cmd_local_delete(&chat_name, &source, yes, dry_run, json)?
         }
         Commands::AxRead { chat_name, count } => {
-            commands::ax_read::cmd_ax_read(commands::ax_read::AxReadOptions {
-                chat_name,
-                count,
-                json,
-            })?
+            commands::ax_read::cmd_ax_read(
+                &config,
+                commands::ax_read::AxReadOptions {
+                    chat_name,
+                    count,
+                    json,
+                },
+            )?
         }
         Commands::AxProbe {
             chat,

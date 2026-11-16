@@ -1,5 +1,5 @@
 use super::embedding::{encode_vector, vector_to_bytes};
-use super::live::{live_event_digest, live_index_text};
+use super::live::{live_event_digest, live_index_text, LIVE_CONTEXT_MAX_FIELD_BYTES};
 use super::reply_bundle::{
     live_event_exclusions, CONTEXT_REPLY_BUNDLE_CONTEXT_LIMIT, CONTEXT_REPLY_BUNDLE_DECISION_LIMIT,
     CONTEXT_REPLY_BUNDLE_SCHEMA_VERSION, CONTEXT_REPLY_BUNDLE_STYLE_LIMIT,
@@ -575,6 +575,16 @@ fn classify_message_topics_assigns_contact_and_ax() {
     assert!(indexed.contains("https://grok.com/supergrok"));
     assert!(indexed.contains("슈퍼그록"));
     assert!(message_has_interest_topic(&indexed));
+}
+
+#[test]
+fn live_index_text_caps_korean_text_at_a_character_boundary() {
+    let message = format!("{}ab", "가".repeat((LIVE_CONTEXT_MAX_FIELD_BYTES - 2) / 3));
+    let joined = format!("{message}\n사진");
+    assert!(message.len() <= LIVE_CONTEXT_MAX_FIELD_BYTES);
+    assert!(!joined.is_char_boundary(LIVE_CONTEXT_MAX_FIELD_BYTES));
+
+    assert_eq!(live_index_text(&message, "", 2), format!("{message}\n"));
 }
 
 #[test]

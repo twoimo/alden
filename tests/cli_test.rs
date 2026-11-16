@@ -1,9 +1,40 @@
+use std::ops::{Deref, DerefMut};
+
 use assert_cmd::Command;
 use predicates::prelude::*;
 
-fn cmd() -> Command {
+/// The binary resolves its config, state, credentials, and message cache
+/// from HOME and `OPENKAKAO_*`, so each run gets an empty HOME of its own
+/// instead of the user's real files.
+struct IsolatedCmd {
+    cmd: Command,
+    _home: tempfile::TempDir,
+}
+
+impl Deref for IsolatedCmd {
+    type Target = Command;
+    fn deref(&self) -> &Command {
+        &self.cmd
+    }
+}
+
+impl DerefMut for IsolatedCmd {
+    fn deref_mut(&mut self) -> &mut Command {
+        &mut self.cmd
+    }
+}
+
+fn cmd() -> IsolatedCmd {
+    let home = tempfile::tempdir().unwrap();
     #[allow(deprecated)]
-    Command::cargo_bin("openkakao-cli").unwrap()
+    let mut cmd = Command::cargo_bin("openkakao-cli").unwrap();
+    cmd.env("HOME", home.path());
+    for (key, _) in std::env::vars_os() {
+        if key.to_string_lossy().starts_with("OPENKAKAO_") {
+            cmd.env_remove(key);
+        }
+    }
+    IsolatedCmd { cmd, _home: home }
 }
 
 #[test]

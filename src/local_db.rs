@@ -9,10 +9,6 @@ use serde::Serialize;
 use serde_json::json;
 use sha2::Digest;
 
-// ---------------------------------------------------------------------------
-// Public data types
-// ---------------------------------------------------------------------------
-
 #[derive(Debug, Clone, Serialize)]
 pub struct LocalChat {
     pub chat_id: i64,
@@ -87,23 +83,6 @@ fn collect_json_titles(value: &serde_json::Value, depth: usize, titles: &mut Vec
     for nested in map.values() {
         collect_json_titles(nested, depth + 1, titles);
     }
-}
-
-#[cfg_attr(not(test), allow(dead_code))]
-fn json_title_from_value(value: &serde_json::Value, depth: usize) -> Option<String> {
-    let mut titles = Vec::new();
-    collect_json_titles(value, depth, &mut titles);
-    preferred_group_title(&titles)
-}
-
-#[cfg_attr(not(test), allow(dead_code))]
-fn title_from_extra(extra: &str) -> Option<String> {
-    let trimmed = extra.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    let value: serde_json::Value = serde_json::from_str(trimmed).ok()?;
-    json_title_from_value(&value, 0)
 }
 
 fn plist_i64_values(value: &plist::Value) -> Vec<i64> {
@@ -459,8 +438,9 @@ pub fn is_self_author(author_id: i64, account_user_id: i64) -> bool {
 
 /// Exact attachment metadata read from one immutable local Kakao DB row.
 ///
-/// This intentionally excludes the message body and sender identity.  Media
-/// consumers need only the row identity, type, and opaque attachment JSON.
+/// This intentionally excludes the message body and sender name. Media
+/// consumers need only the row identity, author, type, and opaque attachment
+/// JSON.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocalMediaAttachment {
     pub chat_id: i64,
@@ -534,10 +514,6 @@ pub struct LocalAuthorIdentity {
     pub is_self: bool,
 }
 
-// ---------------------------------------------------------------------------
-// Device info extraction
-// ---------------------------------------------------------------------------
-
 pub fn get_platform_uuid() -> Result<String> {
     let output = Command::new("/usr/sbin/ioreg")
         .args(["-rd1", "-c", "IOPlatformExpertDevice"])
@@ -548,8 +524,6 @@ pub fn get_platform_uuid() -> Result<String> {
     for line in stdout.lines() {
         if line.contains("IOPlatformUUID") {
             // ioreg outputs: "IOPlatformUUID" = "XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX"
-            // Split on '"' gives: ["", "IOPlatformUUID", " = ", "UUID-VALUE", ""]
-            // parts[3] is always the UUID value regardless of whether parts[1] is the key name.
             let parts: Vec<&str> = line.split('"').collect();
             if parts.len() >= 4 {
                 let uuid = parts[3].trim();
@@ -622,6 +596,13 @@ pub enum IdentityCacheMode {
     NoMutation,
 }
 
+fn platform_uuid(mode: IdentityCacheMode) -> Result<String> {
+    match mode {
+        IdentityCacheMode::Normal => get_platform_uuid(),
+        IdentityCacheMode::NoMutation => get_platform_uuid_without_process(),
+    }
+}
+
 fn local_db_identity_cache_path() -> Option<PathBuf> {
     dirs::data_local_dir().map(|dir| dir.join("openkakao").join("local-db-identity.json"))
 }
@@ -639,14 +620,16 @@ fn sha512_hex(bytes: &[u8]) -> String {
 /// True when SHA-512(user_id) equals the account hash. KakaoTalk stores the
 /// account hash as SHA-512 of the decimal user id, so a plist or cache that
 /// pairs the active hash with a different id is inconsistent and must not be
-/// trusted (2026-09-13).
+/// trusted.
 fn user_id_matches_account_hash(user_id: i64, account_hash: &str) -> bool {
     user_id > 0 && sha512_hex(user_id.to_string().as_bytes()) == account_hash
 }
 
-fn read_cached_user_id(uuid: &str, account_hash: &str) -> Option<i64> {
-    let path = local_db_identity_cache_path()?;
-    let metadata = std::fs::symlink_metadata(&path).ok()?;
+/// Reads the owner-only identity cache entry recorded for this machine. With
+/// a known account hash the entry must name that account and its user id must
+/// hash to it; without one, any positive cached id is returned.
+fn read_cached_user_id(path: &Path, uuid: &str, account_hash: Option<&str>) -> Option<i64> {
+    let metadata = std::fs::symlink_metadata(path).ok()?;
     if !metadata.file_type().is_file() {
         return None;
     }
@@ -658,42 +641,21 @@ fn read_cached_user_id(uuid: &str, account_hash: &str) -> Option<i64> {
         }
     }
     let value: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&path).ok()?).ok()?;
+        serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()?;
     let matches = value.get("schema_version") == Some(&serde_json::Value::from(3))
         && value.get("uuid").and_then(|value| value.as_str()) == Some(uuid)
-        && value.get("account_hash").and_then(|value| value.as_str()) == Some(account_hash);
+        && account_hash.is_none_or(|hash| {
+            value.get("account_hash").and_then(|value| value.as_str()) == Some(hash)
+        });
     if !matches {
         return None;
     }
-    value
-        .get("user_id")
-        .and_then(|value| value.as_i64())
-        .filter(|id| user_id_matches_account_hash(*id, account_hash))
-}
-fn read_cached_user_id_for_uuid(uuid: &str) -> Option<i64> {
-    let path = local_db_identity_cache_path()?;
-    let metadata = std::fs::symlink_metadata(&path).ok()?;
-    if !metadata.file_type().is_file() {
-        return None;
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        if metadata.uid() != unsafe { libc::geteuid() } || metadata.mode() & 0o077 != 0 {
-            return None;
-        }
-    }
-    let value: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&path).ok()?).ok()?;
-    let matches = value.get("schema_version") == Some(&serde_json::Value::from(3))
-        && value.get("uuid").and_then(|value| value.as_str()) == Some(uuid);
-    if !matches {
-        return None;
-    }
-    value
-        .get("user_id")
-        .and_then(|value| value.as_i64())
-        .filter(|id| *id > 0)
+    let user_id = value.get("user_id").and_then(|value| value.as_i64())?;
+    let trusted = match account_hash {
+        Some(hash) => user_id_matches_account_hash(user_id, hash),
+        None => user_id > 0,
+    };
+    trusted.then_some(user_id)
 }
 
 fn cache_user_id(uuid: &str, account_hash: &str, user_id: i64) {
@@ -731,11 +693,7 @@ fn get_user_id_from_plist() -> Result<i64> {
 
 fn get_user_id_from_plist_with_mode(mode: IdentityCacheMode) -> Result<i64> {
     let home = dirs::home_dir().context("No home directory")?;
-    let current_uuid = if mode == IdentityCacheMode::NoMutation {
-        get_platform_uuid_without_process().ok()
-    } else {
-        get_platform_uuid().ok()
-    };
+    let current_uuid = platform_uuid(mode).ok();
     let container_prefs =
         home.join("Library/Containers/com.kakao.KakaoTalkMac/Data/Library/Preferences");
 
@@ -776,33 +734,17 @@ fn get_user_id_from_plist_with_mode(mode: IdentityCacheMode) -> Result<i64> {
         let dictionary: plist::Dictionary = plist::from_file(path).ok()?;
         extract_active_account_hash(&dictionary)
     });
-    if let (Some(uuid), Some(account_hash)) =
-        (current_uuid.as_deref(), active_account_hash.as_deref())
-    {
-        if let Some(user_id) = read_cached_user_id(uuid, account_hash) {
-            let db_name = derive_database_name(user_id, uuid);
-            if find_database_path(&db_name).is_ok() {
+    // With a known account hash the cache must match it, so a stale entry for
+    // another account on this machine never selects that account's database.
+    // Without one (a freshly rebooted KakaoTalk may not have written its
+    // friends-revision key yet), the UUID-only entry is trusted when its
+    // derived database exists.
+    if let Some(uuid) = current_uuid.as_deref() {
+        if let Some(user_id) = local_db_identity_cache_path()
+            .and_then(|path| read_cached_user_id(&path, uuid, active_account_hash.as_deref()))
+        {
+            if find_database_path(&derive_database_name(user_id, uuid)).is_ok() {
                 return Ok(user_id);
-            }
-        }
-    }
-
-    // Last-resort fallback: trust the uid-0600 identity cache when it matches
-    // this machine's platform UUID and the derived database actually exists.
-    // A freshly rebooted KakaoTalk may not have written its friends-revision
-    // key yet, which leaves the account hash unresolvable from plists.
-    //
-    // This UUID-only lookup ignores the account hash, so it is allowed only
-    // when the current account hash could not be read. If the hash is known
-    // and a different account is signed in, a stale cache for another account
-    // on the same machine must be rejected instead of selecting its database.
-    if active_account_hash.is_none() {
-        if let Some(uuid) = current_uuid.as_deref() {
-            if let Some(user_id) = read_cached_user_id_for_uuid(uuid) {
-                let db_name = derive_database_name(user_id, uuid);
-                if find_database_path(&db_name).is_ok() {
-                    return Ok(user_id);
-                }
             }
         }
     }
@@ -849,7 +791,6 @@ fn get_user_id_from_plist_with_mode(mode: IdentityCacheMode) -> Result<i64> {
 fn extract_user_id_from_plist(path: &std::path::Path) -> Result<i64> {
     let dict: plist::Dictionary = plist::from_file(path).context("Failed to parse plist")?;
 
-    // Strategy A: FSChatWindowTransparency keys → longest common suffix
     let prefix = "FSChatWindowTransparency";
     let suffixes: Vec<String> = dict
         .keys()
@@ -858,7 +799,7 @@ fn extract_user_id_from_plist(path: &std::path::Path) -> Result<i64> {
         .collect();
 
     if suffixes.len() >= 2 {
-        // Each suffix is chatId + userId. Find the common tail.
+        // Each suffix is chatId + userId.
         if let Some(common) = longest_common_suffix(&suffixes) {
             if let Ok(id) = common.parse::<i64>() {
                 return Ok(id);
@@ -866,7 +807,6 @@ fn extract_user_id_from_plist(path: &std::path::Path) -> Result<i64> {
         }
     }
 
-    // Strategy B: Direct key lookup
     for key in &["userId", "user_id", "KAKAO_USER_ID", "userID"] {
         if let Some(val) = dict.get(key) {
             if let Some(n) = val.as_signed_integer() {
@@ -880,8 +820,8 @@ fn extract_user_id_from_plist(path: &std::path::Path) -> Result<i64> {
         }
     }
 
-    // Strategy C: FSChatWindowFrame_ keys → shared userId (newer KT versions).
-    // Cheap and exact, so it runs before the brute-force fallback below.
+    // Newer KakaoTalk versions write FSChatWindowFrame_ keys. Cheap and exact,
+    // so this runs before the brute-force fallback below.
     let frame_prefix = "NSWindow Frame FSChatWindowFrame_";
     let frame_suffixes: Vec<String> = dict
         .keys()
@@ -896,8 +836,6 @@ fn extract_user_id_from_plist(path: &std::path::Path) -> Result<i64> {
         return Ok(id);
     }
 
-    // Strategy D: SHA-512 brute-force from revision key suffixes (last resort).
-    // Bounded by a wall-clock deadline so a missing/foreign hash cannot hang the CLI.
     if let Some(hash) = extract_active_account_hash(&dict) {
         if let Some(id) = recover_user_id_from_sha512(&hash) {
             return Ok(id);
@@ -935,8 +873,6 @@ fn extract_active_account_hash(dict: &plist::Dictionary) -> Option<String> {
     None
 }
 
-/// True when the plist belongs to the active account. When the active hash is
-/// unknown, any plist may be considered.
 fn plist_matches_active_account(dict: &plist::Dictionary, active_hash: Option<&str>) -> bool {
     match active_hash {
         None => true,
@@ -944,7 +880,6 @@ fn plist_matches_active_account(dict: &plist::Dictionary, active_hash: Option<&s
     }
 }
 
-/// Wall-clock budget for the one-time parallel SHA-512 pre-image search.
 const SHA512_BRUTE_FORCE_BUDGET: std::time::Duration = std::time::Duration::from_secs(30);
 const SHA512_BRUTE_FORCE_MAX_USER_ID: i64 = 1_000_000_000;
 const SHA512_BRUTE_FORCE_CHUNK: i64 = 100_000;
@@ -1025,9 +960,6 @@ fn recover_user_id_from_sha512(hex_hash: &str) -> Option<i64> {
     }
 }
 
-/// Return the userId shared by every `FSChatWindowFrame_` suffix, but only when
-/// all suffixes are identical and parse as an integer. Returns `None` if the
-/// suffixes disagree (which would otherwise collapse to a wrong shared tail).
 fn unique_user_id(suffixes: &[String]) -> Option<i64> {
     let first = suffixes.first()?;
     if suffixes.iter().all(|s| s == first) {
@@ -1058,9 +990,7 @@ fn longest_common_suffix(strings: &[String]) -> Option<String> {
     Some(reversed[0][..common_len].iter().rev().collect())
 }
 
-// ---------------------------------------------------------------------------
-// Key derivation (matches kakaocli KeyDerivation.swift)
-// ---------------------------------------------------------------------------
+// Key derivation mirrors kakaocli's KeyDerivation.swift.
 
 fn hashed_device_uuid(uuid: &str) -> String {
     let sha1_hash = sha1::Sha1::digest(uuid.as_bytes());
@@ -1071,7 +1001,6 @@ fn hashed_device_uuid(uuid: &str) -> String {
     base64::engine::general_purpose::STANDARD.encode(&combined)
 }
 
-/// Derive the database file name from userId and UUID.
 fn derive_database_name(user_id: i64, uuid: &str) -> String {
     let reversed_uuid: String = uuid.chars().rev().collect();
     let hawawa = [
@@ -1086,18 +1015,15 @@ fn derive_database_name(user_id: i64, uuid: &str) -> String {
     ]
     .join(".");
 
-    // Salt: reversed base64(SHA1 || SHA256) of UUID
     let hashed = hashed_device_uuid(uuid);
     let salt: String = hashed.chars().rev().collect();
 
     let derived = pbkdf2_sha256(hawawa.as_bytes(), salt.as_bytes(), 100_000, 128);
     let hex_str = hex::encode(&derived);
 
-    // Extract substring [28..106] (78 chars)
     hex_str[28..106].to_string()
 }
 
-/// Derive the SQLCipher encryption key.
 fn derive_secure_key(user_id: i64, uuid: &str) -> String {
     let hashed = hashed_device_uuid(uuid);
 
@@ -1118,7 +1044,6 @@ fn derive_secure_key(user_id: i64, uuid: &str) -> String {
     let hawawa: String = parts.join("F");
     let reversed_hawawa: String = hawawa.chars().rev().collect();
 
-    // Salt: UUID from 30% offset to end
     let offset = (uuid.len() as f64 * 0.3) as usize;
     let salt = &uuid[offset..];
 
@@ -1126,28 +1051,24 @@ fn derive_secure_key(user_id: i64, uuid: &str) -> String {
     hex::encode(&derived)
 }
 
-/// PBKDF2-HMAC-SHA256
 fn pbkdf2_sha256(password: &[u8], salt: &[u8], iterations: u32, key_len: usize) -> Vec<u8> {
     use hmac::{Hmac, Mac};
     type HmacSha256 = Hmac<sha2::Sha256>;
 
-    let hash_len = 32; // SHA-256 output
+    let hash_len = 32;
     let blocks_needed = key_len.div_ceil(hash_len);
     let mut output = Vec::with_capacity(blocks_needed * hash_len);
 
     // The key schedule is identical for every PRF call, so key the HMAC once
-    // and clone the prepared state. Re-deriving it inside the 100k-iteration
-    // loop cost roughly 400k small allocations per derived key.
+    // and clone the prepared state. Re-keying inside the 100k-iteration loop
+    // costs roughly 400k small allocations per derived key.
     let keyed = HmacSha256::new_from_slice(password).expect("HMAC accepts any key length");
 
     for block_num in 1..=blocks_needed as u32 {
-        // U1 = PRF(password, salt || INT_32_BE(block_num))
         let mut mac = keyed.clone();
         mac.update(salt);
         mac.update(&block_num.to_be_bytes());
         let mut u = mac.finalize().into_bytes();
-        // `into_bytes()` yields a fixed-size array that is `Copy`, so the running
-        // XOR accumulator is a plain copy rather than a heap clone.
         let mut result = u;
 
         for _ in 1..iterations {
@@ -1165,17 +1086,16 @@ fn pbkdf2_sha256(password: &[u8], salt: &[u8], iterations: u32, key_len: usize) 
     output
 }
 
-// ---------------------------------------------------------------------------
-// Database path resolution
-// ---------------------------------------------------------------------------
+const KAKAO_DATABASE_DIR: &str =
+    "Library/Containers/com.kakao.KakaoTalkMac/Data/Library/Application Support/com.kakao.KakaoTalkMac";
 
 fn find_database_path(db_name: &str) -> Result<PathBuf> {
     let home = dirs::home_dir().context("No home directory")?;
-    let container_dir = home.join(
-        "Library/Containers/com.kakao.KakaoTalkMac/Data/Library/Application Support/com.kakao.KakaoTalkMac",
-    );
+    find_database_path_in(&home.join(KAKAO_DATABASE_DIR), db_name)
+}
 
-    let container_metadata = std::fs::symlink_metadata(&container_dir)?;
+fn find_database_path_in(container_dir: &Path, db_name: &str) -> Result<PathBuf> {
+    let container_metadata = std::fs::symlink_metadata(container_dir)?;
     if !container_metadata.is_dir() {
         anyhow::bail!("KakaoTalk container directory is not a regular directory");
     }
@@ -1184,59 +1104,25 @@ fn find_database_path(db_name: &str) -> Result<PathBuf> {
         anyhow::bail!("KakaoTalk container path contains a symlink");
     }
 
-    // Fast path: the database file name is deterministic, so open it directly.
-    // Directory enumeration can stall while the sandbox container is unhealthy,
-    // but lookup-by-name keeps working.
-    let direct_path = container_dir.join(db_name);
-    if let Ok(metadata) = std::fs::symlink_metadata(&direct_path) {
-        let under_root = direct_path
+    // The database file name is deterministic, so look it up by name:
+    // directory enumeration can stall while the sandbox container is
+    // unhealthy, but lookup-by-name keeps working. KakaoTalk also creates
+    // hex-named directories, so only a regular file counts.
+    let path = container_dir.join(db_name);
+    if let Ok(metadata) = std::fs::symlink_metadata(&path) {
+        let under_root = path
             .canonicalize()
             .map(|value| value.strip_prefix(&container_root).is_ok())
             .unwrap_or(false);
         #[cfg(unix)]
-        {
+        let owner_only_writable = {
             use std::os::unix::fs::MetadataExt;
-            if metadata.file_type().is_file()
-                && under_root
-                && metadata.uid() == unsafe { libc::geteuid() }
-                && metadata.mode() & 0o022 == 0
-            {
-                return Ok(direct_path);
-            }
-        }
+            metadata.uid() == unsafe { libc::geteuid() } && metadata.mode() & 0o022 == 0
+        };
         #[cfg(not(unix))]
-        if metadata.file_type().is_file() && under_root {
-            return Ok(direct_path);
-        }
-    }
-
-    // Look for a FILE (not directory) matching the derived database name.
-    // Must check it's a regular file — KakaoTalk also creates hex-named directories.
-    if let Ok(entries) = std::fs::read_dir(&container_dir) {
-        for entry in entries.flatten() {
-            let name = entry.file_name().to_string_lossy().to_string();
-            let path = entry.path();
-            let metadata = match std::fs::symlink_metadata(&path) {
-                Ok(metadata) => metadata,
-                Err(_) => continue,
-            };
-            if name == db_name
-                && metadata.file_type().is_file()
-                && path
-                    .canonicalize()
-                    .map(|value| value.strip_prefix(&container_root).is_ok())
-                    .unwrap_or(false)
-            {
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::MetadataExt;
-                    if metadata.uid() != unsafe { libc::geteuid() } || metadata.mode() & 0o022 != 0
-                    {
-                        continue;
-                    }
-                }
-                return Ok(path);
-            }
+        let owner_only_writable = true;
+        if metadata.file_type().is_file() && under_root && owner_only_writable {
+            return Ok(path);
         }
     }
 
@@ -1283,10 +1169,6 @@ fn database_identity(path: &Path) -> Result<DatabaseIdentity> {
         })
     }
 }
-
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
 
 pub struct LocalDbReader {
     conn: Connection,
@@ -1395,9 +1277,9 @@ impl std::io::Write for ByteCounter {
 /// The container sits behind macOS's "App Data" consent gate. While the
 /// operator has not answered the prompt, the `open()` syscall blocks inside
 /// SQLite's WAL shared-memory mapping, and the unattended host spent its whole
-/// 240s preflight budget there before fencing every room (2026-09-18). Bound
-/// the wait so a pending decision fails fast with a reason the operator can act
-/// on instead of a silent stall.
+/// 240s preflight budget there before fencing every room. Bound the wait so a
+/// pending decision fails fast with a reason the operator can act on instead of
+/// a silent stall.
 const LOCAL_DB_OPEN_TIMEOUT_SECS_DEFAULT: u64 = 25;
 const LOCAL_DB_OPEN_TIMEOUT_SECS_ENV: &str = "OPENKAKAO_DB_OPEN_TIMEOUT_SECS";
 const LOCAL_DB_OPEN_TIMEOUT_SECS_MAX: u64 = 240;
@@ -1467,13 +1349,57 @@ fn open_encrypted_connection_bounded(db_path: &Path, secure_key: &str) -> Result
         // state in SQLCipher builds used by current KakaoTalk databases.
         conn.pragma_update(None, "key", &key)?;
         conn.pragma_update(None, "cipher_compatibility", 3)?;
-        // Verify the key works
         conn.execute_batch("SELECT count(*) FROM sqlite_master")
             .context(
                 "Failed to decrypt KakaoTalk database. Key derivation may have failed. \
                  Ensure KakaoTalk is installed and logged in.",
             )?;
         Ok(conn)
+    })
+}
+
+/// Maps the `NTChatRoom` projection shared by the chat listings and
+/// `poll_after`: `chatId, type, chatName, activeMembersCount, lastLogId,
+/// lastUpdatedAt, countOfNewMessage, displayName`. An unnamed room takes its
+/// direct member's display name.
+fn local_chat_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<LocalChat> {
+    let chat_name: String = row.get::<_, String>(2).unwrap_or_default();
+    let display_name: String = row.get::<_, String>(7).unwrap_or_default();
+    let title = if chat_name.is_empty() {
+        display_name.clone()
+    } else {
+        chat_name
+    };
+    Ok(LocalChat {
+        chat_id: row.get(0)?,
+        chat_type: row.get(1)?,
+        chat_name: title,
+        database_chat_name: None,
+        active_members_count: row.get(3).unwrap_or(0),
+        last_log_id: row.get(4).unwrap_or(0),
+        last_updated_at: row.get(5).unwrap_or(0),
+        unread_count: row.get(6).unwrap_or(0),
+        display_name,
+    })
+}
+
+/// Maps the `NTChatMessage` projection `logId, chatId, authorId, senderName,
+/// message, attachment, type, sentAt`.
+fn local_message_from_row(
+    row: &rusqlite::Row<'_>,
+    account_user_id: i64,
+) -> rusqlite::Result<LocalMessage> {
+    let author_id = row.get(2).unwrap_or(0);
+    Ok(LocalMessage {
+        log_id: row.get(0)?,
+        chat_id: row.get(1)?,
+        author_id,
+        is_self: is_self_author(author_id, account_user_id),
+        sender_name: row.get(3).unwrap_or_default(),
+        message: row.get(4).unwrap_or_default(),
+        attachment: row.get(5).unwrap_or_default(),
+        message_type: row.get(6).unwrap_or(0),
+        sent_at: row.get(7).unwrap_or(0),
     })
 }
 
@@ -1487,12 +1413,7 @@ impl LocalDbReader {
     }
 
     fn open_with_cache_mode(mode: IdentityCacheMode) -> Result<Self> {
-        let uuid = if mode == IdentityCacheMode::NoMutation {
-            get_platform_uuid_without_process()
-        } else {
-            get_platform_uuid()
-        }
-        .context("Failed to get IOPlatformUUID")?;
+        let uuid = platform_uuid(mode).context("Failed to get IOPlatformUUID")?;
         let user_id =
             get_user_id_from_plist_with_mode(mode).context("Failed to get KakaoTalk user ID")?;
 
@@ -1540,17 +1461,12 @@ impl LocalDbReader {
         Ok(())
     }
 
-    /// Check if the local database is accessible (for doctor command).
     pub fn check_access() -> Result<LocalDbStatus> {
         let home = dirs::home_dir().context("No home directory")?;
-        let container_dir = home.join(
-            "Library/Containers/com.kakao.KakaoTalkMac/Data/Library/Application Support/com.kakao.KakaoTalkMac",
-        );
+        let container_dir = home.join(KAKAO_DATABASE_DIR);
 
-        // Resolve both identities exactly once. Each lookup spawns
-        // `/usr/sbin/ioreg` and parses the KakaoTalk preferences plist, so the
-        // previous "check then re-read" pattern paid for two extra process
-        // spawns and two extra plist parses per doctor run.
+        // Resolve both identities exactly once: each lookup spawns
+        // `/usr/sbin/ioreg` and parses the KakaoTalk preferences plist.
         let uuid = get_platform_uuid().ok();
         let user_id = get_user_id_from_plist().ok();
         let uuid_ok = uuid.is_some();
@@ -1594,26 +1510,7 @@ impl LocalDbReader {
         )?;
 
         let rows = stmt
-            .query_map([limit as i64], |row| {
-                let chat_name: String = row.get::<_, String>(2).unwrap_or_default();
-                let display_name: String = row.get::<_, String>(7).unwrap_or_default();
-                let title = if chat_name.is_empty() {
-                    display_name.clone()
-                } else {
-                    chat_name
-                };
-                Ok(LocalChat {
-                    chat_id: row.get(0)?,
-                    chat_type: row.get(1)?,
-                    chat_name: title,
-                    database_chat_name: None,
-                    active_members_count: row.get(3).unwrap_or(0),
-                    last_log_id: row.get(4).unwrap_or(0),
-                    last_updated_at: row.get(5).unwrap_or(0),
-                    unread_count: row.get(6).unwrap_or(0),
-                    display_name,
-                })
-            })?
+            .query_map([limit as i64], local_chat_from_row)?
             .collect::<Result<Vec<_>, _>>()?;
 
         self.ensure_database_identity()?;
@@ -1633,40 +1530,22 @@ impl LocalDbReader {
         log_id: i64,
     ) -> Result<Option<LocalMessage>> {
         self.ensure_database_identity()?;
-        let mut stmt = self.conn.prepare(
-            "SELECT m.logId, m.chatId, m.authorId,
+        let account_user_id = self.account_user_id;
+        let message = self
+            .conn
+            .prepare(
+                "SELECT m.logId, m.chatId, m.authorId,
                 COALESCE(u.displayName, u.friendNickName, u.nickName, '') as senderName,
                 COALESCE(m.message, '') as message, m.attachment, m.type, m.sentAt
              FROM NTChatMessage m
              LEFT JOIN NTUser u ON m.authorId = u.userId AND u.linkId = 0
              WHERE m.chatId = ? AND m.logId = ?
              LIMIT 1",
-        )?;
-        let params: Vec<Box<dyn rusqlite::types::ToSql>> =
-            vec![Box::new(chat_id), Box::new(log_id)];
-        let params_refs: Vec<&dyn rusqlite::types::ToSql> =
-            params.iter().map(|p| p.as_ref()).collect();
-        let account_user_id = self.account_user_id;
-        let mut rows = stmt.query(params_refs.as_slice())?;
-        let message = match rows.next()? {
-            Some(row) => {
-                let author_id: i64 = row.get(2).unwrap_or(0);
-                Some(LocalMessage {
-                    log_id: row.get(0)?,
-                    chat_id: row.get(1)?,
-                    author_id,
-                    is_self: is_self_author(author_id, account_user_id),
-                    sender_name: row.get(3).unwrap_or_default(),
-                    message: row.get(4).unwrap_or_default(),
-                    attachment: row.get(5).unwrap_or_default(),
-                    message_type: row.get(6).unwrap_or(0),
-                    sent_at: row.get(7).unwrap_or(0),
-                })
-            }
-            None => None,
-        };
-        drop(rows);
-        drop(stmt);
+            )?
+            .query_row(rusqlite::params![chat_id, log_id], |row| {
+                local_message_from_row(row, account_user_id)
+            })
+            .optional()?;
         self.ensure_database_identity()?;
         Ok(message)
     }
@@ -1742,8 +1621,7 @@ impl LocalDbReader {
             };
             // Member display names are only the last-resort title source, so
             // resolve the title first and run the per-member `NTUser` lookups
-            // only when the room has no usable name of its own. Rooms that do
-            // have a name previously paid one query per displayed member.
+            // only when the room has no usable name of its own.
             let mut title = resolve_group_title(
                 &chat_name,
                 &kakao_title,
@@ -1810,26 +1688,7 @@ impl LocalDbReader {
                  ORDER BY r.chatId ASC",
             )?;
             let rows = stmt
-                .query_map([], |row| {
-                    let chat_name: String = row.get::<_, String>(2).unwrap_or_default();
-                    let display_name: String = row.get::<_, String>(7).unwrap_or_default();
-                    let title = if chat_name.is_empty() {
-                        display_name.clone()
-                    } else {
-                        chat_name
-                    };
-                    Ok(LocalChat {
-                        chat_id: row.get(0)?,
-                        chat_type: row.get(1)?,
-                        chat_name: title,
-                        database_chat_name: None,
-                        active_members_count: row.get(3).unwrap_or(0),
-                        last_log_id: row.get(4).unwrap_or(0),
-                        last_updated_at: row.get(5).unwrap_or(0),
-                        unread_count: row.get(6).unwrap_or(0),
-                        display_name,
-                    })
-                })?
+                .query_map([], local_chat_from_row)?
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(rows)
         })();
@@ -1854,9 +1713,11 @@ impl LocalDbReader {
         since_ts: Option<i64>,
     ) -> Result<Vec<LocalMessage>> {
         self.ensure_database_identity()?;
-        let (sql, params): (String, Vec<Box<dyn rusqlite::types::ToSql>>) =
-            if let Some(ts) = since_ts {
-                (
+        let account_user_id = self.account_user_id;
+        let map_row = |row: &rusqlite::Row<'_>| local_message_from_row(row, account_user_id);
+        let rows = if let Some(ts) = since_ts {
+            self.conn
+                .prepare(
                     "SELECT m.logId, m.chatId, m.authorId,
                         COALESCE(u.displayName, u.friendNickName, u.nickName, '') as senderName,
                         COALESCE(m.message, '') as message, m.attachment, m.type, m.sentAt
@@ -1864,12 +1725,13 @@ impl LocalDbReader {
                  LEFT JOIN NTUser u ON m.authorId = u.userId AND u.linkId = 0
                  WHERE m.chatId = ? AND m.sentAt >= ?
                  ORDER BY m.sentAt DESC
-                 LIMIT ?"
-                        .to_string(),
-                    vec![Box::new(chat_id), Box::new(ts), Box::new(limit as i64)],
-                )
-            } else {
-                (
+                 LIMIT ?",
+                )?
+                .query_map(rusqlite::params![chat_id, ts, limit as i64], map_row)?
+                .collect::<Result<Vec<_>, _>>()?
+        } else {
+            self.conn
+                .prepare(
                     "SELECT m.logId, m.chatId, m.authorId,
                         COALESCE(u.displayName, u.friendNickName, u.nickName, '') as senderName,
                         COALESCE(m.message, '') as message, m.attachment, m.type, m.sentAt
@@ -1877,32 +1739,11 @@ impl LocalDbReader {
                  LEFT JOIN NTUser u ON m.authorId = u.userId AND u.linkId = 0
                  WHERE m.chatId = ?
                  ORDER BY m.sentAt DESC
-                 LIMIT ?"
-                        .to_string(),
-                    vec![Box::new(chat_id), Box::new(limit as i64)],
-                )
-            };
-
-        let mut stmt = self.conn.prepare(&sql)?;
-        let params_refs: Vec<&dyn rusqlite::types::ToSql> =
-            params.iter().map(|p| p.as_ref()).collect();
-        let account_user_id = self.account_user_id;
-        let rows = stmt
-            .query_map(params_refs.as_slice(), |row| {
-                let author_id = row.get(2).unwrap_or(0);
-                Ok(LocalMessage {
-                    log_id: row.get(0)?,
-                    chat_id: row.get(1)?,
-                    author_id,
-                    is_self: is_self_author(author_id, account_user_id),
-                    sender_name: row.get(3).unwrap_or_default(),
-                    message: row.get(4).unwrap_or_default(),
-                    attachment: row.get(5).unwrap_or_default(),
-                    message_type: row.get(6).unwrap_or(0),
-                    sent_at: row.get(7).unwrap_or(0),
-                })
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
+                 LIMIT ?",
+                )?
+                .query_map(rusqlite::params![chat_id, limit as i64], map_row)?
+                .collect::<Result<Vec<_>, _>>()?
+        };
 
         self.ensure_database_identity()?;
         Ok(rows)
@@ -2045,7 +1886,7 @@ impl LocalDbReader {
         Ok(rows)
     }
 
-    /// Find the memo chat (나와의 채팅) ID. Type 0 with activeMembersCount = 1.
+    /// Find the memo chat (나와의 채팅) ID.
     pub fn find_memo_chat_id(&self) -> Result<Option<i64>> {
         self.ensure_database_identity()?;
         let mut stmt = self.conn.prepare(
@@ -2055,8 +1896,6 @@ impl LocalDbReader {
             Ok(id) => Some(id),
             Err(rusqlite::Error::QueryReturnedNoRows) => None,
             Err(error) => {
-                // A real query failure used to be indistinguishable from "no
-                // memo room". Keep returning `None` but make it diagnosable.
                 eprintln!("[local_db.rs::find_memo_chat_id] query failed: {error}");
                 None
             }
@@ -2100,9 +1939,6 @@ impl LocalDbReader {
             anyhow::bail!("reconcile_required");
         }
         let tx = self.conn.unchecked_transaction()?;
-        // The chat row, the aggregate stats and the row page reuse SQL that is
-        // identical on every poll, so take them from the prepared-statement
-        // cache instead of re-parsing per poll per room.
         let mut stmt = tx.prepare_cached(
             "SELECT r.chatId, r.type, r.chatName, r.activeMembersCount,
                     r.lastLogId, r.lastUpdatedAt, r.countOfNewMessage,
@@ -2113,26 +1949,7 @@ impl LocalDbReader {
              LIMIT 1",
         )?;
         let chat = stmt
-            .query_row([chat_id], |row| {
-                let chat_name: String = row.get::<_, String>(2).unwrap_or_default();
-                let display_name: String = row.get::<_, String>(7).unwrap_or_default();
-                let title = if chat_name.is_empty() {
-                    display_name.clone()
-                } else {
-                    chat_name
-                };
-                Ok(LocalChat {
-                    chat_id: row.get(0)?,
-                    chat_type: row.get(1)?,
-                    chat_name: title,
-                    database_chat_name: None,
-                    active_members_count: row.get(3).unwrap_or(0),
-                    last_log_id: row.get(4).unwrap_or(0),
-                    last_updated_at: row.get(5).unwrap_or(0),
-                    unread_count: row.get(6).unwrap_or(0),
-                    display_name,
-                })
-            })
+            .query_row([chat_id], local_chat_from_row)
             .optional()?
             .with_context(|| "Target chat is no longer available")?;
         drop(stmt);
@@ -2159,20 +1976,7 @@ impl LocalDbReader {
                 LOCAL_CONVERSATION_MESSAGE_TYPE_MIN,
                 limit as i64
             ],
-            |row| {
-                let author_id = row.get(2).unwrap_or(0);
-                Ok(LocalMessage {
-                    log_id: row.get(0)?,
-                    chat_id: row.get(1)?,
-                    author_id,
-                    is_self: is_self_author(author_id, account_user_id),
-                    sender_name: row.get(3).unwrap_or_default(),
-                    message: row.get(4).unwrap_or_default(),
-                    attachment: row.get(5).unwrap_or_default(),
-                    message_type: row.get(6).unwrap_or(0),
-                    sent_at: row.get(7).unwrap_or(0),
-                })
-            },
+            |row| local_message_from_row(row, account_user_id),
         )?;
         let messages = rows.collect::<Result<Vec<_>, _>>()?;
         drop(stmt);
@@ -2185,44 +1989,13 @@ impl LocalDbReader {
         }) {
             anyhow::bail!("reconcile_required");
         }
-        let first_log_id = messages.first().map(|message| message.log_id);
-        let last_log_id = messages.last().map(|message| message.log_id);
-        let rows_match_aggregate = total_rows >= 0 && total_rows as usize == messages.len();
-        let has_more = total_rows >= 0 && total_rows as usize > messages.len();
-        let (status, has_gap) =
-            if chat.last_log_id < after_log_id || (!rows_match_aggregate && !has_more) {
-                ("unknown", true)
-            } else if has_more {
-                ("partial", false)
-            } else if let Some(last) = last_log_id {
-                if chat.last_log_id != last || available_max != Some(last) {
-                    ("gap", true)
-                } else {
-                    ("complete", false)
-                }
-            } else if chat.last_log_id != after_log_id {
-                ("gap", true)
-            } else {
-                ("empty", false)
-            };
-        let completeness = LocalPollCompleteness {
-            status: status.to_string(),
+        let completeness = poll_completeness(
             after_log_id,
-            first_log_id,
-            last_log_id,
-            chat_last_log_id: chat.last_log_id,
-            row_count: total_rows,
-            returned_count: messages.len() as i64,
-            available_max_log_id: available_max,
-            id_domain: LOCAL_POLL_ID_DOMAIN.to_string(),
-            has_gap,
-            has_more,
-            proof: if has_gap {
-                "reconcile_required".to_string()
-            } else {
-                "sqlite_snapshot_rowset".to_string()
-            },
-        };
+            chat.last_log_id,
+            &messages,
+            total_rows,
+            available_max,
+        );
 
         let envelope = LocalPollEnvelope {
             schema_version: LOCAL_POLL_SCHEMA_VERSION,
@@ -2237,9 +2010,6 @@ impl LocalDbReader {
         }) {
             anyhow::bail!("local poll payload exceeds bounded size");
         }
-        // Encode into a counting sink rather than a buffer: the guard only needs
-        // the encoded length, and `to_vec` allocated the whole envelope on every
-        // poll for every watched room. Short-circuit order is unchanged.
         let mut payload_bytes = ByteCounter::default();
         serde_json::to_writer(&mut payload_bytes, &envelope)?;
         if payload_bytes.0 > LOCAL_POLL_MAX_BYTES {
@@ -2248,6 +2018,55 @@ impl LocalDbReader {
         tx.commit()?;
         self.ensure_database_identity()?;
         Ok(envelope)
+    }
+}
+
+/// Classifies one bounded `poll_after` page against the row count and maximum
+/// log ID read from the same SQLite snapshot.
+pub fn poll_completeness(
+    after_log_id: i64,
+    chat_last_log_id: i64,
+    messages: &[LocalMessage],
+    total_rows: i64,
+    available_max: Option<i64>,
+) -> LocalPollCompleteness {
+    let first_log_id = messages.first().map(|message| message.log_id);
+    let last_log_id = messages.last().map(|message| message.log_id);
+    let rows_match_aggregate = total_rows >= 0 && total_rows as usize == messages.len();
+    let has_more = total_rows >= 0 && total_rows as usize > messages.len();
+    let (status, has_gap) =
+        if chat_last_log_id < after_log_id || (!rows_match_aggregate && !has_more) {
+            ("unknown", true)
+        } else if has_more {
+            ("partial", false)
+        } else if let Some(last) = last_log_id {
+            if chat_last_log_id != last || available_max != Some(last) {
+                ("gap", true)
+            } else {
+                ("complete", false)
+            }
+        } else if chat_last_log_id != after_log_id {
+            ("gap", true)
+        } else {
+            ("empty", false)
+        };
+    LocalPollCompleteness {
+        status: status.to_string(),
+        after_log_id,
+        first_log_id,
+        last_log_id,
+        chat_last_log_id,
+        row_count: total_rows,
+        returned_count: messages.len() as i64,
+        available_max_log_id: available_max,
+        id_domain: LOCAL_POLL_ID_DOMAIN.to_string(),
+        has_gap,
+        has_more,
+        proof: if has_gap {
+            "reconcile_required".to_string()
+        } else {
+            "sqlite_snapshot_rowset".to_string()
+        },
     }
 }
 
@@ -2382,7 +2201,6 @@ mod tests {
     fn user_id_must_match_the_account_hash() {
         let hash = sha512_hex(b"222");
         assert!(user_id_matches_account_hash(222, &hash));
-        // Another account's id, even with the active hash present, is rejected.
         assert!(!user_id_matches_account_hash(111, &hash));
         assert!(!user_id_matches_account_hash(0, &hash));
         assert!(!user_id_matches_account_hash(-1, &hash));
@@ -2393,12 +2211,9 @@ mod tests {
         let active = revision_plist("aaaa", 7);
         let other = revision_plist("bbbb", 9);
         let empty = revision_plist("cccc", 0);
-        // Known active hash: only the plist that produced it is accepted, so a
-        // different account's plist cannot be selected or cached.
         assert!(plist_matches_active_account(&active, Some("aaaa")));
         assert!(!plist_matches_active_account(&other, Some("aaaa")));
         assert!(!plist_matches_active_account(&empty, Some("aaaa")));
-        // Unknown active hash: any plist may be considered.
         assert!(plist_matches_active_account(&other, None));
     }
 
@@ -2598,7 +2413,6 @@ mod tests {
 
     #[test]
     fn unique_user_id_rejects_shared_tail() {
-        // Different userIds that share a trailing run must NOT collapse to "3377".
         let s = vec!["199453377".to_string(), "23377".to_string()];
         assert_eq!(unique_user_id(&s), None);
     }
@@ -2645,10 +2459,6 @@ mod tests {
     fn group_title_uses_extra_json_when_chat_name_is_empty() {
         assert_eq!(
             resolve_group_title("", "", "", "{\"name\":\"부자멘토멘티\"}", &[]),
-            Some("부자멘토멘티".to_string()),
-        );
-        assert_eq!(
-            title_from_extra("{\"name\":\"부자멘토멘티\"}"),
             Some("부자멘토멘티".to_string()),
         );
     }
@@ -2994,6 +2804,516 @@ mod tests {
             "production replica reader must reject writes"
         );
         Ok(())
+    }
+
+    const READER_FIXTURE_KEY: &str = "reader-query-fixture-key";
+    const READER_FIXTURE_SELF_ID: i64 = 900;
+
+    /// Opens a production `LocalDbReader` over a synthetic, encrypted copy of
+    /// the KakaoTalk tables the reader queries. No real account data is used.
+    fn reader_query_fixture() -> Result<(tempfile::TempDir, LocalDbReader)> {
+        let tempdir = tempfile::tempdir()?;
+        let source_path = tempdir.path().join("source.sqlite3");
+        let replica_path = tempdir.path().join("replica.sqlite3");
+        {
+            let connection = Connection::open(&source_path)?;
+            connection.pragma_update(None, "key", READER_FIXTURE_KEY)?;
+            connection.pragma_update(None, "cipher_compatibility", 3)?;
+            connection.execute_batch(
+                "CREATE TABLE NTUser(
+                    userId INTEGER NOT NULL, linkId INTEGER NOT NULL,
+                    displayName TEXT, friendNickName TEXT, nickName TEXT);
+                 CREATE TABLE NTChatRoom(
+                    chatId INTEGER PRIMARY KEY, type INTEGER, chatName TEXT,
+                    activeMembersCount INTEGER, lastLogId INTEGER, lastUpdatedAt INTEGER,
+                    countOfNewMessage INTEGER, directChatMemberUserId INTEGER, extra TEXT,
+                    linkId INTEGER, displayMemberIds BLOB, hidden INTEGER NOT NULL DEFAULT 0);
+                 CREATE TABLE NTChatMessage(
+                    chatId INTEGER NOT NULL, logId INTEGER NOT NULL, authorId INTEGER NOT NULL,
+                    message TEXT, attachment TEXT, type INTEGER NOT NULL, sentAt INTEGER NOT NULL);
+                 CREATE TABLE NTChatMeta(
+                    chatId INTEGER NOT NULL, kakaoGroupName TEXT, groupNickname TEXT,
+                    content TEXT, updatedAt INTEGER);
+                 CREATE TABLE NTOpenLink(linkId INTEGER NOT NULL, linkName TEXT);
+
+                 INSERT INTO NTUser VALUES (700, 0, 'Alice', NULL, NULL);
+                 INSERT INTO NTUser VALUES (701, 0, NULL, 'Bob-friend', 'bob');
+                 INSERT INTO NTUser VALUES (702, 0, NULL, NULL, 'carol');
+                 INSERT INTO NTUser VALUES (703, 5, 'LinkOnly', NULL, NULL);
+                 INSERT INTO NTUser VALUES (900, 0, 'Me', NULL, NULL);
+
+                 INSERT INTO NTChatRoom VALUES
+                    (42, 1, 'Ops West', 5, 103, 3000, 2, NULL, '', 0, NULL, 0);
+                 INSERT INTO NTChatRoom VALUES
+                    (45, 1, '', 3, 0, 2500, 0, NULL, '', 0,
+                     X'BC02000000000000BF02000000000000', 0);
+                 INSERT INTO NTChatRoom VALUES
+                    (43, 0, '', 2, 205, 2000, 0, 701, '', 0, NULL, 0);
+                 INSERT INTO NTChatRoom VALUES
+                    (46, 2, NULL, 4, 0, 1500, 0, NULL, '{\"title\":\"Extra Title\"}', 7, NULL, 0);
+                 INSERT INTO NTChatRoom VALUES
+                    (44, 0, '', 1, 0, 1000, 0, 900, '', 0, NULL, 0);
+                 INSERT INTO NTChatRoom VALUES
+                    (47, 1, 'Hidden Group', 4, 0, 900, 0, NULL, '', 0, NULL, 1);
+                 INSERT INTO NTChatRoom VALUES
+                    (48, 1, '', 3, 0, 800, 0, NULL, '', 0, NULL, 0);
+                 INSERT INTO NTChatRoom VALUES
+                    (49, 1, '', 3, 0, 700, 0, NULL, '', 0, NULL, 0);
+                 INSERT INTO NTChatRoom VALUES
+                    (-1, 0, 'system', 0, 0, 100, 0, NULL, '', 0, NULL, 0);
+
+                 INSERT INTO NTChatMeta VALUES (42, 'Ops West Team', NULL, NULL, 1);
+                 INSERT INTO NTChatMeta VALUES (46, NULL, NULL, '{\"name\":\"Meta Name\"}', 5);
+                 INSERT INTO NTChatMeta VALUES (49, NULL, 'Nick Group', NULL, 1);
+                 INSERT INTO NTOpenLink VALUES (7, 'Open Link Room');
+
+                 INSERT INTO NTChatMessage VALUES (42, 100, 700, 'hello team', NULL, 1, 1000);
+                 INSERT INTO NTChatMessage VALUES (42, 101, 900, 'my reply', '', 1, 1100);
+                 INSERT INTO NTChatMessage VALUES
+                    (42, 102, 701, NULL, '{\"k\":\"a/b.jpg\"}', 2, 1200);
+                 INSERT INTO NTChatMessage VALUES (42, 103, 702, 'last words', '', 1, 1300);
+                 INSERT INTO NTChatMessage VALUES (42, 104, 702, 'edit-control', '', 0, 1400);
+                 INSERT INTO NTChatMessage VALUES (43, 200, 701, 'dm hi', '', 1, 2000);
+                 INSERT INTO NTChatMessage VALUES (43, 201, 999, 'unknown author', '', 1, 2100);",
+            )?;
+        }
+        std::fs::copy(&source_path, &replica_path)?;
+        let source = LocalDbReplicaSource {
+            db_identity: database_identity(&source_path)?,
+            db_path: source_path,
+            secure_key: READER_FIXTURE_KEY.to_string(),
+            account_fingerprint: "synthetic-reader-fixture".to_string(),
+            account_user_id: READER_FIXTURE_SELF_ID,
+        };
+        let reader = source.open_replica(&replica_path)?;
+        Ok((tempdir, reader))
+    }
+
+    fn message_json(
+        (log_id, chat_id, author_id, sender_name): (i64, i64, i64, &str),
+        (message, attachment, message_type, sent_at): (&str, &str, i32, i64),
+    ) -> serde_json::Value {
+        json!({
+            "log_id": log_id,
+            "chat_id": chat_id,
+            "author_id": author_id,
+            "is_self": author_id == READER_FIXTURE_SELF_ID,
+            "sender_name": sender_name,
+            "message": message,
+            "attachment": attachment,
+            "message_type": message_type,
+            "sent_at": sent_at,
+        })
+    }
+
+    #[test]
+    fn reader_chat_listings_keep_their_order_titles_and_filters() -> Result<()> {
+        let (_tempdir, reader) = reader_query_fixture()?;
+        let chat = |id: i64, kind: i32, name: &str, members: i32, last: i64, updated: i64| {
+            json!({
+                "chat_id": id,
+                "chat_type": kind,
+                "chat_name": name,
+                "active_members_count": members,
+                "last_log_id": last,
+                "last_updated_at": updated,
+                "unread_count": if id == 42 { 2 } else { 0 },
+                "display_name": match id { 43 => "Bob-friend", 44 => "Me", _ => "" },
+            })
+        };
+
+        assert_eq!(
+            serde_json::to_value(reader.list_chats(100)?)?,
+            json!([
+                chat(42, 1, "Ops West", 5, 103, 3000),
+                chat(45, 1, "", 3, 0, 2500),
+                chat(43, 0, "Bob-friend", 2, 205, 2000),
+                chat(46, 2, "", 4, 0, 1500),
+                chat(44, 0, "Me", 1, 0, 1000),
+                chat(47, 1, "Hidden Group", 4, 0, 900),
+                chat(48, 1, "", 3, 0, 800),
+                chat(49, 1, "", 3, 0, 700),
+                chat(-1, 0, "system", 0, 0, 100),
+            ])
+        );
+        assert_eq!(
+            reader
+                .list_chats(3)?
+                .iter()
+                .map(|chat| chat.chat_id)
+                .collect::<Vec<_>>(),
+            vec![42, 45, 43]
+        );
+        assert_eq!(
+            serde_json::to_value(reader.list_all_chats()?)?,
+            json!([
+                chat(-1, 0, "system", 0, 0, 100),
+                chat(42, 1, "Ops West", 5, 103, 3000),
+                chat(43, 0, "Bob-friend", 2, 205, 2000),
+                chat(44, 0, "Me", 1, 0, 1000),
+                chat(45, 1, "", 3, 0, 2500),
+                chat(46, 2, "", 4, 0, 1500),
+                chat(47, 1, "Hidden Group", 4, 0, 900),
+                chat(48, 1, "", 3, 0, 800),
+                chat(49, 1, "", 3, 0, 700),
+            ])
+        );
+
+        let group = |id: i64, kind: i32, title: &str, members: i32, updated: i64, unread: i64| {
+            json!({
+                "chat_id": id,
+                "chat_type": kind,
+                "title": title,
+                "members": members,
+                "last_updated_at": updated,
+                "unread_count": unread,
+            })
+        };
+        assert_eq!(
+            serde_json::to_value(reader.list_group_chats(100)?)?,
+            json!([
+                group(42, 1, "Ops West Team", 5, 3000, 2),
+                group(45, 1, "Alice, LinkOnly", 3, 2500, 0),
+                group(46, 2, "Open Link Room", 4, 1500, 0),
+                group(49, 1, "Nick Group", 3, 700, 0),
+            ])
+        );
+        assert_eq!(
+            serde_json::to_value(reader.list_group_chats(2)?)?,
+            json!([
+                group(42, 1, "Ops West Team", 5, 3000, 2),
+                group(45, 1, "Alice, LinkOnly", 3, 2500, 0),
+            ])
+        );
+        assert_eq!(reader.find_memo_chat_id()?, Some(44));
+        assert_eq!(
+            reader
+                .schema()?
+                .into_iter()
+                .map(|(name, _)| name)
+                .collect::<Vec<_>>(),
+            vec![
+                "NTChatMessage",
+                "NTChatMeta",
+                "NTChatRoom",
+                "NTOpenLink",
+                "NTUser"
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn reader_message_queries_map_rows_and_self_identity() -> Result<()> {
+        let (_tempdir, reader) = reader_query_fixture()?;
+        let m100 = message_json((100, 42, 700, "Alice"), ("hello team", "", 1, 1000));
+        let m101 = message_json((101, 42, 900, "Me"), ("my reply", "", 1, 1100));
+        let m102 = message_json(
+            (102, 42, 701, "Bob-friend"),
+            ("", "{\"k\":\"a/b.jpg\"}", 2, 1200),
+        );
+        let m103 = message_json((103, 42, 702, "carol"), ("last words", "", 1, 1300));
+        let m104 = message_json((104, 42, 702, "carol"), ("edit-control", "", 0, 1400));
+
+        assert_eq!(
+            serde_json::to_value(reader.read_messages(42, 10, None)?)?,
+            json!([m104, m103, m102, m101, m100])
+        );
+        assert_eq!(
+            serde_json::to_value(reader.read_messages(42, 2, Some(1200))?)?,
+            json!([m104, m103])
+        );
+        assert_eq!(
+            serde_json::to_value(reader.read_message_by_log_id(42, 102)?)?,
+            m102
+        );
+        assert!(reader.read_message_by_log_id(42, 999)?.is_none());
+        assert!(reader.read_message_by_log_id(43, 100)?.is_none());
+
+        assert_eq!(
+            serde_json::to_value(reader.search_messages("words", 10, None)?)?,
+            json!([message_json(
+                (103, 42, 702, "carol"),
+                ("last words", "", 1, 1300)
+            )])
+        );
+        assert_eq!(
+            serde_json::to_value(reader.search_messages("i", 10, Some(43))?)?,
+            json!([message_json(
+                (200, 43, 701, "Bob-friend"),
+                ("dm hi", "", 1, 2000)
+            )])
+        );
+        assert_eq!(
+            reader
+                .search_messages("e", 2, None)?
+                .iter()
+                .map(|message| message.log_id)
+                .collect::<Vec<_>>(),
+            vec![104, 101]
+        );
+        assert!(reader
+            .search_messages("x", 10, Some(0))
+            .unwrap_err()
+            .to_string()
+            .contains("search chat ID must be positive"));
+
+        let identity = |author_id: i64, nickname: &str| LocalAuthorIdentity {
+            author_id,
+            nickname: nickname.to_string(),
+            is_self: author_id == READER_FIXTURE_SELF_ID,
+        };
+        assert_eq!(
+            reader.room_author_identities(42)?,
+            vec![
+                identity(700, "Alice"),
+                identity(701, "Bob-friend"),
+                identity(702, "carol"),
+                identity(900, "Me"),
+            ]
+        );
+        assert_eq!(
+            reader.room_author_identities(43)?,
+            vec![identity(701, "Bob-friend"), identity(999, "")]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn reader_poll_after_reports_each_completeness_state() -> Result<()> {
+        let (_tempdir, reader) = reader_query_fixture()?;
+        let room_42 = json!({
+            "chat_id": 42,
+            "chat_type": 1,
+            "chat_name": "Ops West",
+            "active_members_count": 5,
+            "last_log_id": 103,
+            "last_updated_at": 3000,
+            "unread_count": 2,
+            "display_name": "",
+        });
+        let completeness = |status: &str,
+                            after: i64,
+                            span: (Option<i64>, Option<i64>),
+                            counts: (i64, i64, Option<i64>),
+                            chat_last: i64,
+                            has_gap: bool,
+                            has_more: bool| {
+            json!({
+                "status": status,
+                "after_log_id": after,
+                "first_log_id": span.0,
+                "last_log_id": span.1,
+                "chat_last_log_id": chat_last,
+                "row_count": counts.0,
+                "returned_count": counts.1,
+                "available_max_log_id": counts.2,
+                "id_domain": "global_sparse",
+                "has_gap": has_gap,
+                "has_more": has_more,
+                "proof": if has_gap { "reconcile_required" } else { "sqlite_snapshot_rowset" },
+            })
+        };
+        let m101 = message_json((101, 42, 900, "Me"), ("my reply", "", 1, 1100));
+        let m102 = message_json(
+            (102, 42, 701, "Bob-friend"),
+            ("", "{\"k\":\"a/b.jpg\"}", 2, 1200),
+        );
+        let m103 = message_json((103, 42, 702, "carol"), ("last words", "", 1, 1300));
+
+        assert_eq!(
+            serde_json::to_value(reader.poll_after(42, 10, Some(100))?)?,
+            json!({
+                "schema_version": 3,
+                "chat": room_42,
+                "messages": [m101, m102, m103],
+                "completeness": completeness(
+                    "complete", 100, (Some(101), Some(103)), (3, 3, Some(103)), 103, false, false
+                ),
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(reader.poll_after(42, 2, Some(100))?)?,
+            json!({
+                "schema_version": 3,
+                "chat": room_42,
+                "messages": [m101, m102],
+                "completeness": completeness(
+                    "partial", 100, (Some(101), Some(102)), (3, 2, Some(103)), 103, false, true
+                ),
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(reader.poll_after(42, 10, Some(103))?)?["completeness"],
+            completeness("empty", 103, (None, None), (0, 0, None), 103, false, false)
+        );
+        let gap = serde_json::to_value(reader.poll_after(43, 10, None)?)?;
+        assert_eq!(gap["chat"]["chat_name"], "Bob-friend");
+        assert_eq!(
+            gap["completeness"],
+            completeness(
+                "gap",
+                0,
+                (Some(200), Some(201)),
+                (2, 2, Some(201)),
+                205,
+                true,
+                false
+            )
+        );
+        assert_eq!(
+            serde_json::to_value(reader.poll_after(43, 10, Some(250))?)?["completeness"],
+            completeness("unknown", 250, (None, None), (0, 0, None), 205, true, false)
+        );
+
+        let error = |chat_id: i64, after: Option<i64>| {
+            reader
+                .poll_after(chat_id, 10, after)
+                .unwrap_err()
+                .to_string()
+        };
+        assert_eq!(error(0, None), "local poll chat ID must be positive");
+        assert_eq!(error(42, Some(-1)), "reconcile_required");
+        assert_eq!(error(42, Some(i64::MAX)), "reconcile_required");
+        assert_eq!(error(999, None), "Target chat is no longer available");
+        Ok(())
+    }
+
+    fn write_identity_cache(path: &Path, value: &serde_json::Value, mode: u32) {
+        std::fs::write(
+            path,
+            serde_json::to_vec(value).expect("cache entry encodes"),
+        )
+        .expect("write cache entry");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
+                .expect("set cache entry mode");
+        }
+        #[cfg(not(unix))]
+        let _ = mode;
+    }
+
+    #[test]
+    fn identity_cache_is_trusted_only_for_this_machine_and_account() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("local-db-identity.json");
+        let hash = sha512_hex(b"12345");
+        let other_hash = sha512_hex(b"777");
+        let entry = |uuid: &str, user_id: i64, schema_version: i64| {
+            json!({
+                "schema_version": schema_version,
+                "uuid": uuid,
+                "account_hash": hash,
+                "user_id": user_id,
+            })
+        };
+        let both = |path: &Path, uuid: &str| {
+            (
+                read_cached_user_id(path, uuid, Some(&hash)),
+                read_cached_user_id(path, uuid, None),
+            )
+        };
+
+        assert_eq!(both(&path, "device-a"), (None, None), "missing file");
+
+        write_identity_cache(&path, &entry("device-a", 12345, 3), 0o600);
+        assert_eq!(both(&path, "device-a"), (Some(12345), Some(12345)));
+        assert_eq!(
+            read_cached_user_id(&path, "device-a", Some(&other_hash)),
+            None
+        );
+        assert_eq!(both(&path, "device-b"), (None, None), "another machine");
+
+        // An id that does not hash to the account is rejected once the account
+        // is known; the UUID-only lookup still trusts any positive id.
+        write_identity_cache(&path, &entry("device-a", 999, 3), 0o600);
+        assert_eq!(both(&path, "device-a"), (None, Some(999)));
+
+        write_identity_cache(&path, &entry("device-a", 0, 3), 0o600);
+        assert_eq!(both(&path, "device-a"), (None, None), "non-positive id");
+
+        write_identity_cache(&path, &entry("device-a", 12345, 2), 0o600);
+        assert_eq!(
+            both(&path, "device-a"),
+            (None, None),
+            "other schema version"
+        );
+
+        std::fs::write(&path, b"{not json").expect("write malformed entry");
+        assert_eq!(both(&path, "device-a"), (None, None), "malformed entry");
+
+        #[cfg(unix)]
+        {
+            write_identity_cache(&path, &entry("device-a", 12345, 3), 0o644);
+            assert_eq!(
+                both(&path, "device-a"),
+                (None, None),
+                "group/world readable"
+            );
+
+            write_identity_cache(&path, &entry("device-a", 12345, 3), 0o600);
+            let link = dir.path().join("linked-identity.json");
+            std::os::unix::fs::symlink(&path, &link).expect("symlink cache entry");
+            assert_eq!(both(&link, "device-a"), (None, None), "symlinked entry");
+        }
+    }
+
+    #[test]
+    fn database_lookup_accepts_only_an_owner_controlled_regular_file_in_the_container() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        // The container path itself must not traverse a symlink (macOS temp
+        // directories live behind /var -> /private/var).
+        let container = tempdir.path().canonicalize().expect("canonical tempdir");
+        let name = "0f1e2d3c";
+        let target = container.join(name);
+        let not_found = format!(
+            "KakaoTalk database not found in {}. Derived name: {name}",
+            container.display()
+        );
+        let lookup = || find_database_path_in(&container, name).map_err(|error| error.to_string());
+
+        assert_eq!(lookup(), Err(not_found.clone()), "missing");
+
+        std::fs::create_dir(&target).expect("hex-named directory");
+        assert_eq!(lookup(), Err(not_found.clone()), "directory");
+        std::fs::remove_dir(&target).expect("remove directory");
+
+        std::fs::write(&target, b"db").expect("database file");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o644))
+                .expect("owner-writable mode");
+        }
+        assert_eq!(lookup(), Ok(target.clone()));
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o664))
+                .expect("group-writable mode");
+            assert_eq!(lookup(), Err(not_found.clone()), "group-writable");
+            std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o646))
+                .expect("world-writable mode");
+            assert_eq!(lookup(), Err(not_found.clone()), "world-writable");
+
+            std::fs::remove_file(&target).expect("remove database file");
+            let outside = tempfile::NamedTempFile::new().expect("outside file");
+            std::os::unix::fs::symlink(outside.path(), &target).expect("symlinked name");
+            assert_eq!(lookup(), Err(not_found.clone()), "symlink");
+            std::fs::remove_file(&target).expect("remove symlink");
+
+            let linked_container = tempdir.path().join("linked-container");
+            std::fs::create_dir(container.join("real")).expect("real container");
+            std::os::unix::fs::symlink(container.join("real"), &linked_container)
+                .expect("symlinked container");
+            assert_eq!(
+                find_database_path_in(&linked_container, name).map_err(|e| e.to_string()),
+                Err("KakaoTalk container directory is not a regular directory".to_string())
+            );
+        }
     }
 
     #[test]

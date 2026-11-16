@@ -49,7 +49,6 @@ pub struct ValidatedImageFile {
 /// Detect media type from magic bytes, falling back to file extension.
 /// Returns (kakao_msg_type, extension).
 pub fn detect_media_type(data: &[u8], file_ext: &str) -> (i32, String) {
-    // Magic bytes detection
     if data.len() >= 2 && data[0] == 0xFF && data[1] == 0xD8 {
         return (2, "jpg".into());
     }
@@ -59,16 +58,13 @@ pub fn detect_media_type(data: &[u8], file_ext: &str) -> (i32, String) {
     if data.len() >= 4 && &data[..4] == b"GIF8" {
         return (14, "gif".into());
     }
-    // Video: ftyp box (MP4/MOV/3GP)
     if data.len() >= 8 && &data[4..8] == b"ftyp" {
         return (3, if file_ext == "mov" { "mov" } else { "mp4" }.into());
     }
-    // WebM
     if data.len() >= 4 && &data[..4] == b"\x1a\x45\xdf\xa3" {
         return (3, "webm".into());
     }
 
-    // Fall back to extension
     match file_ext {
         "jpg" | "jpeg" => (2, "jpg".into()),
         "png" => (2, "png".into()),
@@ -98,7 +94,8 @@ pub fn jpeg_dimensions(data: &[u8]) -> Option<(i32, i32)> {
         if i + 2 > data.len() {
             return None;
         }
-        // SOF markers (C0-CF except C4, C8, CC)
+        // C4 (DHT), C8 (JPG) and CC (DAC) share the SOF range but are not frame
+        // headers, so they carry no dimensions.
         if (0xC0..=0xCF).contains(&marker) && marker != 0xC4 && marker != 0xC8 && marker != 0xCC {
             if i + 7 > data.len() {
                 return None;
@@ -338,161 +335,169 @@ pub fn parse_image_download_sources(
     let message_type = kakao_still_image_kind(message_type)
         .ok_or_else(|| anyhow::anyhow!("Message type is not a supported image attachment"))?;
     match message_type {
-        2 | 14 => {
-            let emoticon_path = object
-                .get("path")
-                .and_then(serde_json::Value::as_str)
-                .filter(|value| !value.is_empty());
-            let has_talk_locator = object
-                .get("url")
-                .and_then(serde_json::Value::as_str)
-                .is_some_and(|value| !value.is_empty())
-                || object
-                    .get("k")
-                    .and_then(serde_json::Value::as_str)
-                    .is_some_and(|value| !value.is_empty());
-            let (url, locator_hint, requires_credentials) = if message_type == 14 {
-                match (emoticon_path, has_talk_locator) {
-                    (Some(_), true) => {
-                        anyhow::bail!("Emoticon attachment has ambiguous locators")
-                    }
-                    (Some(path), false) => (safe_emoticon_path(path)?, path.to_string(), false),
-                    (None, _) => image_locator(object)?,
-                }
-            } else {
-                if emoticon_path.is_some() {
-                    anyhow::bail!("Photo attachment has an unexpected emoticon path");
-                }
-                image_locator(object)?
-            };
-            let (declared_size, declared_width, declared_height) = if message_type == 2 {
-                (
-                    Some(positive_u64(object.get("s"), "s", MAX_IMAGE_BYTES)?),
-                    Some(positive_dimension(object.get("w"), "w")?),
-                    Some(positive_dimension(object.get("h"), "h")?),
-                )
-            } else {
-                let width = object.get("width");
-                let height = object.get("height");
-                if width.is_some() != height.is_some() {
-                    anyhow::bail!("Emoticon dimensions are incomplete");
-                }
-                (
-                    None,
-                    width
-                        .map(|value| positive_dimension(Some(value), "width"))
-                        .transpose()?,
-                    height
-                        .map(|value| positive_dimension(Some(value), "height"))
-                        .transpose()?,
-                )
-            };
-            let declared_kind = object
-                .get(if message_type == 2 { "mt" } else { "type" })
-                .and_then(serde_json::Value::as_str)
-                .and_then(normalized_media_type);
-            let extension_kind = locator_extension_media_type(&locator_hint);
-            if declared_kind.is_some()
-                && extension_kind.is_some()
-                && declared_kind != extension_kind
-            {
-                anyhow::bail!("Image attachment media type conflicts with its locator");
-            }
-            Ok(vec![ImageDownloadSource {
-                url,
-                requires_credentials,
-                declared_size,
-                declared_width,
-                declared_height,
-                expected_media_type: declared_kind.or(extension_kind).map(str::to_string),
-            }])
-        }
-        27 => {
-            if object.get("url").is_some() || object.get("k").is_some() {
-                anyhow::bail!("Multi-photo attachment has ambiguous scalar locators");
-            }
-            let keys = string_array(object, "kl")?;
-            let urls = string_array(object, "imageUrls")?;
-            let count = urls
-                .as_ref()
-                .map(Vec::len)
-                .or_else(|| keys.as_ref().map(Vec::len))
-                .ok_or_else(|| anyhow::anyhow!("Multi-photo attachment has no locators"))?;
-            if !(2..=MAX_IMAGE_INPUTS).contains(&count)
-                || keys.as_ref().is_some_and(|values| values.len() != count)
-                || urls.as_ref().is_some_and(|values| values.len() != count)
-            {
-                anyhow::bail!("Multi-photo attachment locator count is invalid");
-            }
-            let sizes = positive_u64_array(object, "sl", count, MAX_IMAGE_BYTES)?;
-            let widths = positive_u64_array(object, "wl", count, u64::from(MAX_IMAGE_DIMENSION))?;
-            let heights = positive_u64_array(object, "hl", count, u64::from(MAX_IMAGE_DIMENSION))?;
-            if sizes.iter().sum::<u64>() > MAX_IMAGE_BATCH_BYTES {
-                anyhow::bail!("Multi-photo attachment exceeds the aggregate byte cap");
-            }
-            validate_optional_string_array(object, "csl", count, 128)?;
-            validate_optional_string_array(object, "thumbnailUrls", count, 4096)?;
-            validate_optional_dimension_array(object, "thumbnailWidths", count)?;
-            validate_optional_dimension_array(object, "thumbnailHeights", count)?;
-            let media_types = match string_array(object, "mtl")? {
-                Some(values) if values.len() == count => values
-                    .into_iter()
-                    .map(|value| {
-                        normalized_media_type(value)
-                            .map(str::to_string)
-                            .ok_or_else(|| anyhow::anyhow!("Attachment mtl has an invalid item"))
-                    })
-                    .collect::<Result<Vec<_>>>()?,
-                Some(_) => anyhow::bail!("Attachment mtl has the wrong shape"),
-                None => Vec::new(),
-            };
-            let mut seen_urls = HashSet::new();
-            let mut seen_keys = HashSet::new();
-            let mut sources = Vec::with_capacity(count);
-            for index in 0..count {
-                let direct = urls
-                    .as_ref()
-                    .map(|values| safe_kakao_media_url(values[index]))
-                    .transpose()?;
-                let key_url = keys
-                    .as_ref()
-                    .map(|values| safe_media_key(values[index]))
-                    .transpose()?;
-                if direct
-                    .as_ref()
-                    .is_some_and(|value| !seen_urls.insert(value.clone()))
-                    || key_url
-                        .as_ref()
-                        .is_some_and(|value| !seen_keys.insert(value.clone()))
-                {
-                    anyhow::bail!("Multi-photo attachment contains duplicate locators");
-                }
-                let url = direct
-                    .clone()
-                    .or(key_url.clone())
-                    .ok_or_else(|| anyhow::anyhow!("Multi-photo item has no locator"))?;
-                let locator_hint = urls
-                    .as_ref()
-                    .map(|values| values[index])
-                    .or_else(|| keys.as_ref().map(|values| values[index]))
-                    .unwrap_or("");
-                let expected = media_types
-                    .get(index)
-                    .cloned()
-                    .or_else(|| locator_extension_media_type(locator_hint).map(str::to_string));
-                sources.push(ImageDownloadSource {
-                    url,
-                    requires_credentials: direct.is_none(),
-                    declared_size: Some(sizes[index]),
-                    declared_width: Some(widths[index] as u32),
-                    declared_height: Some(heights[index] as u32),
-                    expected_media_type: expected,
-                });
-            }
-            Ok(sources)
-        }
+        2 | 14 => Ok(vec![single_image_source(object, message_type)?]),
+        27 => multi_photo_sources(object),
         _ => anyhow::bail!("Message type is not a supported image attachment"),
     }
+}
+
+/// A photo (2) or emoticon (14) attachment, which carries exactly one locator.
+fn single_image_source(
+    object: &serde_json::Map<String, serde_json::Value>,
+    message_type: i32,
+) -> Result<ImageDownloadSource> {
+    let emoticon_path = object
+        .get("path")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty());
+    let has_talk_locator = object
+        .get("url")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|value| !value.is_empty())
+        || object
+            .get("k")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|value| !value.is_empty());
+    let (url, locator_hint, requires_credentials) = if message_type == 14 {
+        match (emoticon_path, has_talk_locator) {
+            (Some(_), true) => {
+                anyhow::bail!("Emoticon attachment has ambiguous locators")
+            }
+            (Some(path), false) => (safe_emoticon_path(path)?, path.to_string(), false),
+            (None, _) => image_locator(object)?,
+        }
+    } else {
+        if emoticon_path.is_some() {
+            anyhow::bail!("Photo attachment has an unexpected emoticon path");
+        }
+        image_locator(object)?
+    };
+    let (declared_size, declared_width, declared_height) = if message_type == 2 {
+        (
+            Some(positive_u64(object.get("s"), "s", MAX_IMAGE_BYTES)?),
+            Some(positive_dimension(object.get("w"), "w")?),
+            Some(positive_dimension(object.get("h"), "h")?),
+        )
+    } else {
+        let width = object.get("width");
+        let height = object.get("height");
+        if width.is_some() != height.is_some() {
+            anyhow::bail!("Emoticon dimensions are incomplete");
+        }
+        (
+            None,
+            width
+                .map(|value| positive_dimension(Some(value), "width"))
+                .transpose()?,
+            height
+                .map(|value| positive_dimension(Some(value), "height"))
+                .transpose()?,
+        )
+    };
+    let declared_kind = object
+        .get(if message_type == 2 { "mt" } else { "type" })
+        .and_then(serde_json::Value::as_str)
+        .and_then(normalized_media_type);
+    let extension_kind = locator_extension_media_type(&locator_hint);
+    if declared_kind.is_some() && extension_kind.is_some() && declared_kind != extension_kind {
+        anyhow::bail!("Image attachment media type conflicts with its locator");
+    }
+    Ok(ImageDownloadSource {
+        url,
+        requires_credentials,
+        declared_size,
+        declared_width,
+        declared_height,
+        expected_media_type: declared_kind.or(extension_kind).map(str::to_string),
+    })
+}
+
+/// A multi-photo (27) attachment: parallel per-item arrays in the sender's order.
+fn multi_photo_sources(
+    object: &serde_json::Map<String, serde_json::Value>,
+) -> Result<Vec<ImageDownloadSource>> {
+    if object.get("url").is_some() || object.get("k").is_some() {
+        anyhow::bail!("Multi-photo attachment has ambiguous scalar locators");
+    }
+    let keys = string_array(object, "kl")?;
+    let urls = string_array(object, "imageUrls")?;
+    let count = urls
+        .as_ref()
+        .map(Vec::len)
+        .or_else(|| keys.as_ref().map(Vec::len))
+        .ok_or_else(|| anyhow::anyhow!("Multi-photo attachment has no locators"))?;
+    if !(2..=MAX_IMAGE_INPUTS).contains(&count)
+        || keys.as_ref().is_some_and(|values| values.len() != count)
+        || urls.as_ref().is_some_and(|values| values.len() != count)
+    {
+        anyhow::bail!("Multi-photo attachment locator count is invalid");
+    }
+    let sizes = positive_u64_array(object, "sl", count, MAX_IMAGE_BYTES)?;
+    let widths = positive_u64_array(object, "wl", count, u64::from(MAX_IMAGE_DIMENSION))?;
+    let heights = positive_u64_array(object, "hl", count, u64::from(MAX_IMAGE_DIMENSION))?;
+    if sizes.iter().sum::<u64>() > MAX_IMAGE_BATCH_BYTES {
+        anyhow::bail!("Multi-photo attachment exceeds the aggregate byte cap");
+    }
+    validate_optional_string_array(object, "csl", count, 128)?;
+    validate_optional_string_array(object, "thumbnailUrls", count, 4096)?;
+    validate_optional_dimension_array(object, "thumbnailWidths", count)?;
+    validate_optional_dimension_array(object, "thumbnailHeights", count)?;
+    let media_types = match string_array(object, "mtl")? {
+        Some(values) if values.len() == count => values
+            .into_iter()
+            .map(|value| {
+                normalized_media_type(value)
+                    .map(str::to_string)
+                    .ok_or_else(|| anyhow::anyhow!("Attachment mtl has an invalid item"))
+            })
+            .collect::<Result<Vec<_>>>()?,
+        Some(_) => anyhow::bail!("Attachment mtl has the wrong shape"),
+        None => Vec::new(),
+    };
+    let mut seen_urls = HashSet::new();
+    let mut seen_keys = HashSet::new();
+    let mut sources = Vec::with_capacity(count);
+    for index in 0..count {
+        let direct = urls
+            .as_ref()
+            .map(|values| safe_kakao_media_url(values[index]))
+            .transpose()?;
+        let key_url = keys
+            .as_ref()
+            .map(|values| safe_media_key(values[index]))
+            .transpose()?;
+        if direct
+            .as_ref()
+            .is_some_and(|value| !seen_urls.insert(value.clone()))
+            || key_url
+                .as_ref()
+                .is_some_and(|value| !seen_keys.insert(value.clone()))
+        {
+            anyhow::bail!("Multi-photo attachment contains duplicate locators");
+        }
+        let requires_credentials = direct.is_none();
+        let url = direct
+            .or(key_url)
+            .ok_or_else(|| anyhow::anyhow!("Multi-photo item has no locator"))?;
+        let locator_hint = urls
+            .as_ref()
+            .map(|values| values[index])
+            .or_else(|| keys.as_ref().map(|values| values[index]))
+            .unwrap_or("");
+        let expected = media_types
+            .get(index)
+            .cloned()
+            .or_else(|| locator_extension_media_type(locator_hint).map(str::to_string));
+        sources.push(ImageDownloadSource {
+            url,
+            requires_credentials,
+            declared_size: Some(sizes[index]),
+            declared_width: Some(widths[index] as u32),
+            declared_height: Some(heights[index] as u32),
+            expected_media_type: expected,
+        });
+    }
+    Ok(sources)
 }
 
 /// Parse attachment JSON to extract download URL and filename.
@@ -500,7 +505,6 @@ pub fn parse_image_download_sources(
 pub fn parse_attachment_url(attachment: &str, msg_type: i32) -> Option<(String, String)> {
     let v: serde_json::Value = serde_json::from_str(attachment).ok()?;
 
-    // Try direct "url" field first
     if let Some(url) = v.get("url").and_then(|u| u.as_str()) {
         if !url.is_empty() {
             let filename = v
@@ -509,7 +513,6 @@ pub fn parse_attachment_url(attachment: &str, msg_type: i32) -> Option<(String, 
                 .filter(|n| !n.is_empty() && *n != "(Emoticons)")
                 .map(String::from)
                 .or_else(|| {
-                    // Try to extract filename from "k" field
                     v.get("k")
                         .and_then(|k| k.as_str())
                         .and_then(|k| k.rsplit('/').next())
@@ -524,11 +527,9 @@ pub fn parse_attachment_url(attachment: &str, msg_type: i32) -> Option<(String, 
         }
     }
 
-    // Try "k" field (photo/video key): https://dn-m.talk.kakao.com/talkm/{k}
     if let Some(k) = v.get("k").and_then(|k| k.as_str()) {
         if !k.is_empty() {
             let url = format!("https://dn-m.talk.kakao.com/talkm/{}", k);
-            // Use the key's last segment as filename base
             let key_name = k.rsplit('/').next().unwrap_or(k);
             let ext = media_extension(msg_type);
             let filename = if key_name.contains('.') {
@@ -1270,7 +1271,6 @@ fn download_media_file_without_directory_creation(
     write_bounded_file(&mut response, path, content_length)
 }
 
-/// Download a media file from KakaoTalk CDN.
 pub fn download_media_file(creds: &KakaoCredentials, url: &str, path: &Path) -> Result<u64> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -1284,25 +1284,25 @@ pub fn download_media_file_into_existing_directory(
     url: &str,
     path: &Path,
 ) -> Result<u64> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| anyhow::anyhow!("Media output has no parent directory"))?;
-    if !parent.is_dir() {
-        anyhow::bail!("Media output directory does not exist");
-    }
+    ensure_existing_parent_directory(path)?;
     download_media_file_without_directory_creation(Some(creds), url, path)
 }
 
 /// Download a signed Kakao CDN URL into an already validated directory
 /// without attaching account credentials or creating ancestors.
 pub fn download_public_media_file_into_existing_directory(url: &str, path: &Path) -> Result<u64> {
+    ensure_existing_parent_directory(path)?;
+    download_media_file_without_directory_creation(None, url, path)
+}
+
+fn ensure_existing_parent_directory(path: &Path) -> Result<()> {
     let parent = path
         .parent()
         .ok_or_else(|| anyhow::anyhow!("Media output has no parent directory"))?;
     if !parent.is_dir() {
         anyhow::bail!("Media output directory does not exist");
     }
-    download_media_file_without_directory_creation(None, url, path)
+    Ok(())
 }
 #[cfg(test)]
 mod tests {
@@ -1860,12 +1860,9 @@ mod tests {
 
         let mut at_cap = encoded.clone();
         at_cap.extend(std::iter::repeat_n(0u8, MAX_JPEG_TRAILING_BYTES));
-        let at_cap_stripped = attested_image_bytes_for_decode(
-            &at_cap,
-            Some(at_cap.len() as u64),
-            Some("jpeg"),
-        )
-        .expect("8KiB trailer is the documented Kakao pad cap");
+        let at_cap_stripped =
+            attested_image_bytes_for_decode(&at_cap, Some(at_cap.len() as u64), Some("jpeg"))
+                .expect("8KiB trailer is the documented Kakao pad cap");
         assert_eq!(at_cap_stripped, encoded.as_slice());
 
         let mut over_cap = encoded.clone();
@@ -1902,25 +1899,18 @@ mod tests {
         let mut body = encoded.clone();
         body.extend_from_slice(&trailer);
         assert!(jpeg_prefix_with_exact_sef_trailer(&body).is_none());
-        let stripped = attested_image_bytes_for_decode(
-            &body,
-            Some(body.len() as u64),
-            Some("jpeg"),
-        )
-        .expect("Kakao padded SEF trailers must decode via bounded EOI strip");
+        let stripped =
+            attested_image_bytes_for_decode(&body, Some(body.len() as u64), Some("jpeg"))
+                .expect("Kakao padded SEF trailers must decode via bounded EOI strip");
         assert_eq!(stripped, encoded.as_slice());
         assert_eq!(
             attested_image_bytes_for_decode(&body, Some(body.len() as u64), None).unwrap(),
             encoded.as_slice()
         );
-        assert!(attested_image_bytes_for_decode(
-            &body,
-            Some(body.len() as u64),
-            Some("png")
-        )
-        .is_err());
+        assert!(
+            attested_image_bytes_for_decode(&body, Some(body.len() as u64), Some("png")).is_err()
+        );
     }
-
 
     #[cfg(unix)]
     #[test]

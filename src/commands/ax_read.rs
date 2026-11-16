@@ -1,6 +1,8 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 use crate::ax_send;
+use crate::commands::local_send::require_ax_send;
+use crate::config;
 
 pub struct AxReadOptions {
     pub chat_name: String,
@@ -10,14 +12,14 @@ pub struct AxReadOptions {
 
 /// Read recent messages via AX automation (scrapes the open KakaoTalk chat
 /// window) — no local SQLCipher DB access required. See `src/ax_send.rs`.
-pub fn cmd_ax_read(opts: AxReadOptions) -> Result<()> {
+pub fn cmd_ax_read(config: &config::OpenKakaoConfig, opts: AxReadOptions) -> Result<()> {
     let AxReadOptions {
         ref chat_name,
         count,
         json,
     } = opts;
 
-    let messages = ax_send::read_via_ax(chat_name, count)?;
+    let messages = gated_ax_read(config, || ax_send::read_via_ax(chat_name, count))?;
 
     if json {
         let items: Vec<_> = messages
@@ -51,6 +53,16 @@ pub fn cmd_ax_read(opts: AxReadOptions) -> Result<()> {
     Ok(())
 }
 
+/// `read_via_ax` opens a closed chat by posting Return to KakaoTalk, and the
+/// keystroke lands in whichever window is key, where it can submit a draft.
+fn gated_ax_read<T>(
+    config: &config::OpenKakaoConfig,
+    read: impl FnOnce() -> Result<T>,
+) -> Result<T> {
+    require_ax_send(config).context("ax-read may press Return in KakaoTalk to open the chat")?;
+    read()
+}
+
 pub fn cmd_ax_probe(chat: String, dump: bool, max_nodes: usize, json: bool) -> Result<()> {
     if dump {
         for line in ax_send::dump_ax(&chat, max_nodes)? {
@@ -72,4 +84,29 @@ pub fn cmd_ax_probe(chat: String, dump: bool, max_nodes: usize, json: bool) -> R
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ax_read_reaches_kakaotalk_only_with_the_ax_send_opt_in() {
+        let mut reached = false;
+        let refused = gated_ax_read(&config::OpenKakaoConfig::default(), || {
+            reached = true;
+            Ok(())
+        });
+        assert!(!reached, "ax-read drove KakaoTalk without allow_ax_send");
+        assert!(refused.is_err());
+
+        let mut opted_in = config::OpenKakaoConfig::default();
+        opted_in.safety.allow_ax_send = true;
+        gated_ax_read(&opted_in, || {
+            reached = true;
+            Ok(())
+        })
+        .expect("an opted-in read runs");
+        assert!(reached);
+    }
 }
