@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.9.1] - 2026-11-17
+
+### Added
+- 로컬 MLX 답장 모델로 `beamster/Qwen3.8-Flash-Next-Sushi-2bpw`(Flash-Next 계열)를 허용합니다. 허용 모델은 Rust와 Python에서 같은 표 하나로 관리하며, 그 밖의 로컬 모델은 계속 거부합니다.
+
+### Fixed
+- 워커가 요청한 모델 대신 게이트웨이 목록에서 먼저 나온 Flash-Next 모델로 보내고, 그 모델의 답을 받아들이던 문제를 고쳤습니다. 이제 요청한 ID와 정확히 같은 모델만 쓰고, 없으면 보내지 않습니다.
+- Flash-Next를 고르면 모델 ID가 `ddalcu` 판으로 바뀌어 기록되던 문제를 고쳤습니다.
+- 세션 guardian이 이미 끝난 프로세스 그룹에 `killpg`를 보내다 `EPERM`으로 죽던 문제를 고쳤습니다.
+
 ## [1.9.0] - 2026-11-16
 
 안전 게이트를 조이고, 자동 답장이 두 번 나가지 않도록 큐 구조를 바꾸고, 가장 큰 모듈을 동작 변화 없이 나눈 안정화 묶음입니다. 큐 스키마가 v3로 올라가므로 이 버전으로 바꾼 뒤에는 이전 런타임이 큐를 열지 않습니다.
