@@ -70,10 +70,13 @@ import auto_reply_metrics as perf
 import auto_reply_transition_journal as transition_journal
 from auto_reply_ondevice import (
     FLASH_NEXT_MODEL_ID,
+    QWEN38_27B_FAMILY,
     QWEN38_27B_MODEL_ID,
-    _model_id as _ondevice_model_id,
+    canonical_local_reply_model_id,
     detect_mlx_gateway_models,
     discover_mlx_gateway,
+    loaded_local_reply_model_id,
+    local_reply_model_family,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -11486,18 +11489,12 @@ def _reply_fallback_candidates() -> list[str]:
     return models or list(DEFAULT_REPLY_FALLBACK_MODELS)
 
 
-def _is_mlx_serve_flash_next_model(model: str) -> bool:
-    folded = str(model or "").casefold()
-    return "qwen3.8-flash-next" in folded and "mlx-serve" in folded
-
-
 def _is_mlx_serve_27b_model(model: str) -> bool:
-    folded = str(model or "").casefold()
-    return "qwen3.8-27b" in folded and "mlx-serve" in folded
+    return local_reply_model_family(model) == QWEN38_27B_FAMILY
 
 
 def _is_mlx_serve_text_model(model: str) -> bool:
-    return _is_mlx_serve_flash_next_model(model) or _is_mlx_serve_27b_model(model)
+    return bool(local_reply_model_family(model))
 
 
 def _is_local_reply_model(model: str) -> bool:
@@ -11717,8 +11714,7 @@ def _run_opencodex_generation_unleased(
         if not gateway_base_url:
             return 1, b"", b"mlx_serve_gateway_unavailable"
         advertised = detect_mlx_gateway_models(base_url=gateway_base_url)
-        marker = "Qwen3.8-27B" if _is_mlx_serve_27b_model(target_model) else "Qwen3.8-Flash-Next"
-        advertised_model = _ondevice_model_id(advertised, marker)
+        advertised_model = loaded_local_reply_model_id(advertised, model)
         if not advertised_model:
             reason = (
                 b"mlx_serve_vision_model_not_resident"
@@ -11817,8 +11813,8 @@ def _run_opencodex_generation_unleased(
         if local_mlx:
             response_model = body.get("model")
             if isinstance(response_model, str) and response_model.strip() and (
-                auto_reply_ondevice._canonical_managed_model_id(response_model)
-                != auto_reply_ondevice._canonical_managed_model_id(target_model)
+                canonical_local_reply_model_id(response_model)
+                != canonical_local_reply_model_id(model)
             ):
                 return 1, b"", b"mlx_serve_response_model_mismatch"
         content = str(body["choices"][0]["message"]["content"])

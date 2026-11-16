@@ -39,7 +39,15 @@ from local_mlx_gateway import (
 
 MLX_GATEWAY_CANDIDATES = (MLX_GATEWAY_BASE_URL,)
 FLASH_NEXT_MODEL_ID = "mlx/ddalcu/Qwen3.8-Flash-Next-MLX-Serve-mixed-4-8bit"
+FLASH_NEXT_SUSHI_MODEL_ID = "mlx/beamster/Qwen3.8-Flash-Next-Sushi-2bpw"
 QWEN38_27B_MODEL_ID = "mlx/ddalcu/Qwen3.8-27B-MLX-Serve-4bit"
+FLASH_NEXT_FAMILY = "Qwen3.8-Flash-Next"
+QWEN38_27B_FAMILY = "Qwen3.8-27B"
+LOCAL_REPLY_MODEL_FAMILIES = {
+    FLASH_NEXT_MODEL_ID: FLASH_NEXT_FAMILY,
+    FLASH_NEXT_SUSHI_MODEL_ID: FLASH_NEXT_FAMILY,
+    QWEN38_27B_MODEL_ID: QWEN38_27B_FAMILY,
+}
 QWEN38_27B_DEFAULT_LOADED = False
 PROBE_TIMEOUT_SECONDS = 45.0
 PROBE_HARD_TIMEOUT_SECONDS = 90.0
@@ -562,10 +570,19 @@ class ModelResidencyManager:
         return ModelSwapResult(True, target_model, SwapStage.READY, "ready", tuple(stages))
 
 
-def _canonical_managed_model_id(value: Any) -> str:
+def canonical_local_reply_model_id(value: Any) -> str:
     candidate = str(value or "").strip()
     if candidate and not candidate.startswith("mlx/"):
         candidate = f"mlx/{candidate}"
+    return candidate if candidate in LOCAL_REPLY_MODEL_FAMILIES else ""
+
+
+def local_reply_model_family(value: Any) -> str:
+    return LOCAL_REPLY_MODEL_FAMILIES.get(canonical_local_reply_model_id(value), "")
+
+
+def _canonical_managed_model_id(value: Any) -> str:
+    candidate = canonical_local_reply_model_id(value)
     if candidate in {FLASH_NEXT_MODEL_ID, QWEN38_27B_MODEL_ID}:
         return candidate
     return ""
@@ -1079,21 +1096,38 @@ def detect_local_qwen_models(home: Path | None = None) -> dict[str, str]:
     return found
 
 
-def _model_id(models: Sequence[dict[str, Any]], marker: str) -> str:
-    wanted = marker.casefold()
+def _loaded_mlx_model_ids(models: Sequence[dict[str, Any]]) -> Iterator[str]:
     for item in models:
         model_id = str(item.get("id") or "").strip()
         owner = str(item.get("owned_by") or "").strip().casefold()
-        if not (model_id.startswith("mlx/") or owner == "mlx-serve"):
-            continue
-        if wanted not in model_id.casefold():
+        if not model_id or not (model_id.startswith("mlx/") or owner == "mlx-serve"):
             continue
         state = str(item.get("state") or "").strip().casefold()
         if item.get("loaded") is False or state in {"unloaded", "error", "failed"}:
             continue
-        if model_id:
-            return model_id
-    return ""
+        yield model_id
+
+
+def _model_id(models: Sequence[dict[str, Any]], marker: str) -> str:
+    wanted = marker.casefold()
+    return next(
+        (model_id for model_id in _loaded_mlx_model_ids(models) if wanted in model_id.casefold()),
+        "",
+    )
+
+
+def loaded_local_reply_model_id(models: Sequence[dict[str, Any]], requested: Any) -> str:
+    wanted = canonical_local_reply_model_id(requested)
+    if not wanted:
+        return ""
+    return next(
+        (
+            model_id
+            for model_id in _loaded_mlx_model_ids(models)
+            if canonical_local_reply_model_id(model_id) == wanted
+        ),
+        "",
+    )
 
 
 def _local_model_path(models: dict[str, str], marker: str) -> str:

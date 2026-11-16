@@ -95,6 +95,11 @@ impl LocalMlxProbeTransport for FakeLocalMlxProbeTransport {
     }
 }
 
+fn flash_next_choice() -> AutoReplyLlmChoice {
+    AutoReplyLlmChoice::from_model(config::MLX_FLASH_NEXT_MODEL_ID)
+        .expect("the MLX-Serve Flash-Next model is allowlisted")
+}
+
 #[test]
 fn retry_bounded_stops_at_the_first_success() {
     let mut calls = 0;
@@ -222,32 +227,25 @@ fn auto_reply_supervisor_python_is_environment_and_site_isolated() {
 
 #[test]
 fn auto_reply_llm_aliases_map_to_attested_models() {
-    for exact in [
-        config::MLX_FLASH_NEXT_MODEL_ID,
-        config::MLX_FLASH_NEXT_PREFIXED_MODEL_ID,
-    ] {
-        assert_eq!(
-            AutoReplyLlmChoice::from_model(exact),
-            Some(AutoReplyLlmChoice::MlxQwen38FlashNext)
-        );
+    for model in [config::MLX_FLASH_NEXT_MODEL_ID, config::MLX_27B_MODEL_ID] {
+        for exact in [model.to_owned(), format!("mlx/{model}")] {
+            assert_eq!(
+                AutoReplyLlmChoice::from_model(&exact).map(AutoReplyLlmChoice::model),
+                Some(model)
+            );
+        }
     }
     assert_eq!(
         AutoReplyLlmChoice::from_model(&format!(" {} ", config::MLX_FLASH_NEXT_MODEL_ID)),
         None,
         "the local model allowlist must remain exact"
     );
-    for exact in [config::MLX_27B_MODEL_ID, config::MLX_27B_PREFIXED_MODEL_ID] {
-        assert_eq!(
-            AutoReplyLlmChoice::from_model(exact),
-            Some(AutoReplyLlmChoice::MlxQwen38TwentySevenB)
-        );
-    }
     let mut json_config = config::OpenKakaoConfig::default();
-    json_config.auto_reply.reply_model = Some(config::MLX_FLASH_NEXT_PREFIXED_MODEL_ID.into());
+    json_config.auto_reply.reply_model = Some(format!("mlx/{}", config::MLX_FLASH_NEXT_MODEL_ID));
     assert_eq!(
         select_auto_reply_llm(&mut json_config, None, true)
             .expect("JSON mode should select the configured exact local model"),
-        AutoReplyLlmChoice::MlxQwen38FlashNext
+        flash_next_choice()
     );
     assert_eq!(
         AutoReplyLlmChoice::from_model("gemini-3.7-flash")
@@ -276,7 +274,7 @@ fn auto_reply_llm_aliases_map_to_attested_models() {
         Some("opencode-go-session")
     );
     assert_eq!(config.auto_reply.reply_runner_kind.as_deref(), Some("gjc"));
-    assert_eq!(AutoReplyLlmChoice::all().len(), 5);
+    assert_eq!(AutoReplyLlmChoice::all().len(), 6);
 }
 
 #[test]
@@ -287,7 +285,7 @@ fn auto_reply_local_mlx_choice_applies_fail_closed_profile() {
     config.model.provider = Some("openai-codex".into());
     config.model.retention = Some("provider-policy".into());
 
-    AutoReplyLlmChoice::MlxQwen38FlashNext.apply(&mut config);
+    flash_next_choice().apply(&mut config);
 
     assert_eq!(config.model.privacy_mode.as_deref(), Some("local"));
     assert!(!config.model.allow_egress);
@@ -315,13 +313,13 @@ fn auto_reply_local_mlx_choice_applies_fail_closed_profile() {
 #[test]
 fn auto_reply_local_mlx_probe_uses_only_bounded_loopback_requests() {
     let mut config = config::OpenKakaoConfig::default();
-    AutoReplyLlmChoice::MlxQwen38FlashNext.apply(&mut config);
+    flash_next_choice().apply(&mut config);
     let transport = FakeLocalMlxProbeTransport::new(vec![
         FakeLocalMlxProbeTransport::json(
             200,
             serde_json::json!({
                 "data": [{
-                    "id": config::MLX_FLASH_NEXT_PREFIXED_MODEL_ID,
+                    "id": format!("mlx/{}", config::MLX_FLASH_NEXT_MODEL_ID),
                     "loaded": true,
                     "state": "ready"
                 }]
@@ -333,12 +331,8 @@ fn auto_reply_local_mlx_probe_uses_only_bounded_loopback_requests() {
         ),
     ]);
 
-    probe_auto_reply_llm_with_local_transport(
-        &config,
-        AutoReplyLlmChoice::MlxQwen38FlashNext,
-        &transport,
-    )
-    .expect("ready local MLX model should pass the bounded probe");
+    probe_auto_reply_llm_with_local_transport(&config, flash_next_choice(), &transport)
+        .expect("ready local MLX model should pass the bounded probe");
 
     let requests = transport.requests.borrow();
     assert_eq!(requests.len(), 2);
@@ -380,7 +374,7 @@ fn auto_reply_local_mlx_probe_uses_only_bounded_loopback_requests() {
 #[test]
 fn auto_reply_local_mlx_probe_fails_closed_without_generation_or_remote_fallback() {
     let mut config = config::OpenKakaoConfig::default();
-    AutoReplyLlmChoice::MlxQwen38FlashNext.apply(&mut config);
+    flash_next_choice().apply(&mut config);
     let not_ready = FakeLocalMlxProbeTransport::new(vec![FakeLocalMlxProbeTransport::json(
         200,
         serde_json::json!({
@@ -391,12 +385,8 @@ fn auto_reply_local_mlx_probe_fails_closed_without_generation_or_remote_fallback
             }]
         }),
     )]);
-    let error = probe_auto_reply_llm_with_local_transport(
-        &config,
-        AutoReplyLlmChoice::MlxQwen38FlashNext,
-        &not_ready,
-    )
-    .expect_err("an unloaded model must fail before generation");
+    let error = probe_auto_reply_llm_with_local_transport(&config, flash_next_choice(), &not_ready)
+        .expect_err("an unloaded model must fail before generation");
     assert_eq!(error.to_string(), "local MLX model is not ready");
     assert_eq!(not_ready.requests.borrow().len(), 1);
 
@@ -404,24 +394,19 @@ fn auto_reply_local_mlx_probe_fails_closed_without_generation_or_remote_fallback
         status: 200,
         body: b"{not-json".to_vec(),
     }]);
-    assert!(probe_auto_reply_llm_with_local_transport(
-        &config,
-        AutoReplyLlmChoice::MlxQwen38FlashNext,
-        &malformed,
-    )
-    .is_err());
+    assert!(
+        probe_auto_reply_llm_with_local_transport(&config, flash_next_choice(), &malformed)
+            .is_err()
+    );
     assert_eq!(malformed.requests.borrow().len(), 1);
 
     let redirected = FakeLocalMlxProbeTransport::new(vec![FakeLocalMlxProbeTransport::json(
         302,
         serde_json::json!({"redirect": true}),
     )]);
-    let redirect_error = probe_auto_reply_llm_with_local_transport(
-        &config,
-        AutoReplyLlmChoice::MlxQwen38FlashNext,
-        &redirected,
-    )
-    .expect_err("redirects must fail closed");
+    let redirect_error =
+        probe_auto_reply_llm_with_local_transport(&config, flash_next_choice(), &redirected)
+            .expect_err("redirects must fail closed");
     assert!(redirect_error.to_string().contains("HTTP 302"));
     assert_eq!(redirected.requests.borrow().len(), 1);
 
@@ -429,11 +414,90 @@ fn auto_reply_local_mlx_probe_fails_closed_without_generation_or_remote_fallback
     let invalid_profile = FakeLocalMlxProbeTransport::new(Vec::new());
     assert!(probe_auto_reply_llm_with_local_transport(
         &config,
-        AutoReplyLlmChoice::MlxQwen38FlashNext,
+        flash_next_choice(),
         &invalid_profile,
     )
     .is_err());
     assert!(invalid_profile.requests.borrow().is_empty());
+}
+
+const FLASH_NEXT_SUSHI_MODEL_ID: &str = "beamster/Qwen3.8-Flash-Next-Sushi-2bpw";
+const QWEN36_35B_MODEL_ID: &str = "ddalcu/Qwen3.6-35B-A3B-MLX-Serve-4bit";
+
+#[test]
+fn auto_reply_flash_next_sushi_model_keeps_its_identity_through_startup() {
+    for requested in [
+        FLASH_NEXT_SUSHI_MODEL_ID.to_owned(),
+        format!("mlx/{FLASH_NEXT_SUSHI_MODEL_ID}"),
+    ] {
+        let mut config = config::OpenKakaoConfig::default();
+        let choice = select_auto_reply_llm(&mut config, Some(&requested), true)
+            .expect("the Sushi model is an allowlisted local reply model");
+        assert!(choice.label().contains("Flash-Next"), "{}", choice.label());
+        choice.apply(&mut config);
+        assert_eq!(
+            config.auto_reply.reply_model.as_deref(),
+            Some(FLASH_NEXT_SUSHI_MODEL_ID)
+        );
+        config::validate_auto_reply_local_mlx_profile(&config)
+            .expect("the Sushi model passes the local MLX profile");
+
+        let transport = FakeLocalMlxProbeTransport::new(vec![
+            FakeLocalMlxProbeTransport::json(
+                200,
+                serde_json::json!({
+                    "data": [
+                        {"id": QWEN36_35B_MODEL_ID, "loaded": true, "state": "ready"},
+                        {"id": FLASH_NEXT_SUSHI_MODEL_ID, "loaded": true, "state": "ready"}
+                    ]
+                }),
+            ),
+            FakeLocalMlxProbeTransport::json(
+                200,
+                serde_json::json!({"choices": [{"message": {"content": "확인"}}]}),
+            ),
+        ]);
+        probe_auto_reply_llm_with_local_transport(&config, choice, &transport)
+            .expect("an advertised, ready Sushi model passes the probe");
+        let requests = transport.requests.borrow();
+        let generation: serde_json::Value =
+            serde_json::from_slice(requests[1].body.as_deref().expect("generation probe body"))
+                .expect("parse generation probe body");
+        assert_eq!(
+            generation.get("model").and_then(serde_json::Value::as_str),
+            Some(FLASH_NEXT_SUSHI_MODEL_ID)
+        );
+    }
+}
+
+#[test]
+fn auto_reply_refuses_local_models_outside_the_allowlist() {
+    for model in [
+        QWEN36_35B_MODEL_ID.to_owned(),
+        format!("mlx/{QWEN36_35B_MODEL_ID}"),
+        format!("mlx/mlx/{FLASH_NEXT_SUSHI_MODEL_ID}"),
+        FLASH_NEXT_SUSHI_MODEL_ID.to_lowercase(),
+        FLASH_NEXT_SUSHI_MODEL_ID.replace("2bpw", "4bpw"),
+    ] {
+        let mut config = config::OpenKakaoConfig::default();
+        assert!(
+            select_auto_reply_llm(&mut config, Some(&model), true).is_err(),
+            "{model} must not be selectable"
+        );
+
+        let choice =
+            select_auto_reply_llm(&mut config, Some(config::MLX_FLASH_NEXT_MODEL_ID), true)
+                .expect("the MLX-Serve Flash-Next model is allowlisted");
+        choice.apply(&mut config);
+        config.auto_reply.reply_model = Some(model.clone());
+        assert!(
+            config::validate_auto_reply_local_mlx_profile(&config).is_err(),
+            "{model} must fail the local MLX profile"
+        );
+        let transport = FakeLocalMlxProbeTransport::new(Vec::new());
+        assert!(probe_auto_reply_llm_with_local_transport(&config, choice, &transport).is_err());
+        assert!(transport.requests.borrow().is_empty());
+    }
 }
 
 #[test]

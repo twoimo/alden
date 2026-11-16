@@ -1,5 +1,6 @@
 import importlib.util
 import contextlib
+import errno
 import io
 import json
 import os
@@ -1966,6 +1967,92 @@ raise SystemExit(73)
                 for leader in leaders:
                     _kill_stray_member(member, leader.pid)
                     leader.wait(timeout=5)
+
+    def test_session_guardian_survives_eperm_from_its_exited_leaders_group(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = self._fixture(Path(temporary))
+            module = fixture["module"]
+            read_fd, write_fd = module._create_session_guardian_control(
+                fixture["binary"], fixture["config"], "bind:42:room"
+            )
+
+            class ExitedLeader:
+                pid = 9191
+
+                def poll(self):
+                    return 7
+
+                def wait(self, timeout=None):
+                    return 7
+
+            def group_without_members(_process_group, _signum):
+                raise PermissionError(errno.EPERM, "Operation not permitted")
+
+            try:
+                with mock.patch.object(module.os, "getpid", return_value=6100), mock.patch.object(
+                    module.os, "getpgrp", return_value=6100
+                ), mock.patch.object(module.os, "getsid", return_value=6100), mock.patch.object(
+                    module.os, "killpg", side_effect=group_without_members
+                ):
+                    result = module.run_session_guardian(
+                        read_fd,
+                        popen_factory=lambda _argv, **_kwargs: ExitedLeader(),
+                        select_fn=lambda *_args: ([], [], []),
+                        install_signal_handlers=False,
+                    )
+            finally:
+                os.close(write_fd)
+        self.assertEqual(result, 7)
+
+    def test_owned_child_sweep_stops_once_the_group_reports_eperm(self):
+        module = load_entry("auto_reply_terminate_eperm_sweep_test")
+
+        class ExitedLeader:
+            pid = 9191
+
+            def poll(self):
+                return 0
+
+            def wait(self, timeout=None):
+                return 0
+
+        signals = []
+
+        def member_exits_on_term(process_group, signum):
+            self.assertEqual(process_group, ExitedLeader.pid)
+            if signal.SIGTERM in signals:
+                raise PermissionError(errno.EPERM, "Operation not permitted")
+            if signum:
+                signals.append(signum)
+
+        with mock.patch.object(module.os, "killpg", side_effect=member_exits_on_term):
+            module._terminate_owned_child(ExitedLeader(), grace_seconds=0.2)
+        self.assertEqual(signals, [signal.SIGTERM])
+
+    def test_owned_child_sweep_kills_a_surviving_member_and_tolerates_eperm(self):
+        module = load_entry("auto_reply_terminate_eperm_kill_test")
+
+        class ExitedLeader:
+            pid = 9191
+
+            def poll(self):
+                return 0
+
+            def wait(self, timeout=None):
+                return 0
+
+        signals = []
+
+        def member_outlives_term(process_group, signum):
+            self.assertEqual(process_group, ExitedLeader.pid)
+            if signum:
+                signals.append(signum)
+            if signum == signal.SIGKILL:
+                raise PermissionError(errno.EPERM, "Operation not permitted")
+
+        with mock.patch.object(module.os, "killpg", side_effect=member_outlives_term):
+            module._terminate_owned_child(ExitedLeader(), grace_seconds=0.05)
+        self.assertEqual(signals, [signal.SIGTERM, signal.SIGKILL])
 
     def test_runtime_asset_drift_during_check_fails_without_receipt(self):
         with tempfile.TemporaryDirectory() as temporary:

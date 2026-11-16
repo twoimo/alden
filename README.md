@@ -144,7 +144,7 @@ reply_runner_kind = "opencodex"
 reply_model = "ddalcu/Qwen3.8-Flash-Next-MLX-Serve-mixed-4-8bit"
 ```
 
-`reply_runner` is a validated transport placeholder for this local MLX profile and must point to the installed `opencodex` executable. The exact Flash-Next and 27B IDs, with or without the `mlx/` prefix, are allowlisted and use the same bounded localhost readiness and generation probes. The recorded 27B model was unloaded and not ready, so actual 27B generation remains unverified.
+`reply_runner` is a validated transport placeholder for this local MLX profile and must point to the installed `opencodex` executable. Three exact IDs, with or without the `mlx/` prefix, are allowlisted and use the same bounded localhost readiness and generation probes: the Flash-Next models `ddalcu/Qwen3.8-Flash-Next-MLX-Serve-mixed-4-8bit` and `beamster/Qwen3.8-Flash-Next-Sushi-2bpw`, and the 27B model `ddalcu/Qwen3.8-27B-MLX-Serve-4bit`. The recorded 27B model was unloaded and not ready, so actual 27B generation remains unverified.
 
 ### 4. Run
 
