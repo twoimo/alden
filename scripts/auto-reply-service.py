@@ -822,12 +822,15 @@ def _session_retry_delay(consecutive_failures: int) -> tuple[float, bool]:
 
 
 def _process_group_exists(process_group: int) -> bool:
+    """Return whether the group still has a member this process can signal.
+
+    killpg reports EPERM, not ESRCH, when no member can be signalled, and
+    macOS does so for a group whose leader has exited.
+    """
     try:
         os.killpg(process_group, 0)
-    except ProcessLookupError:
+    except (ProcessLookupError, PermissionError):
         return False
-    except PermissionError:
-        return True
     return True
 
 
@@ -854,9 +857,10 @@ def _terminate_owned_child(
     deadline = time.monotonic() + grace_seconds
     try:
         os.killpg(process_group, signal.SIGTERM)
-    except ProcessLookupError:
-        child.wait(timeout=grace_seconds)
-        return
+    except (ProcessLookupError, PermissionError):
+        if not _process_group_exists(process_group):
+            child.wait(timeout=grace_seconds)
+            return
     try:
         child.wait(timeout=grace_seconds)
     except subprocess.TimeoutExpired:
@@ -867,7 +871,7 @@ def _terminate_owned_child(
             if os.getpgid(child.pid) != process_group:
                 raise RuntimeError("owned child process group changed during shutdown")
             os.killpg(process_group, signal.SIGKILL)
-        except ProcessLookupError:
+        except (ProcessLookupError, PermissionError):
             pass
         child.wait(timeout=grace_seconds)
         return
@@ -877,7 +881,7 @@ def _terminate_owned_child(
     if _process_group_exists(process_group):
         try:
             os.killpg(process_group, signal.SIGKILL)
-        except ProcessLookupError:
+        except (ProcessLookupError, PermissionError):
             pass
 
 
