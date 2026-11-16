@@ -424,9 +424,33 @@ class AutoReplyWorkerMlxTests(unittest.TestCase):
             process_runner.assert_not_called()
 
     SUSHI_MODEL_ID = "beamster/Qwen3.8-Flash-Next-Sushi-2bpw"
+    SUSHI_4BPW_MODEL_ID = "beamster/Qwen3.8-Flash-Next-Sushi-4bpw"
+    DDALCU_FLASH_NEXT_MODEL_ID = "ddalcu/Qwen3.8-Flash-Next-MLX-Serve-mixed-4-8bit"
+    QWEN38_27B_ROW_ID = "mlx/ddalcu/Qwen3.8-27B-MLX-Serve-4bit"
+    QWEN38_27B_8BIT_ROW_ID = "mlx/ddalcu/Qwen3.8-27B-MLX-Serve-8bit"
     QWEN36_35B_MODEL_ID = "ddalcu/Qwen3.6-35B-A3B-MLX-Serve-4bit"
 
+    @staticmethod
+    def _gateway_row(model_id, *, loaded=True):
+        return {
+            "id": model_id,
+            "owned_by": "mlx-serve",
+            "loaded": loaded,
+            "state": "ready" if loaded else "unloaded",
+        }
+
     def _run_sushi_candidate(self, model, completion, *, image_paths=None):
+        return self._run_local_candidate(
+            model,
+            [
+                self._gateway_row(self.QWEN36_35B_MODEL_ID),
+                self._gateway_row(self.SUSHI_MODEL_ID),
+            ],
+            completion,
+            image_paths=image_paths,
+        )
+
+    def _run_local_candidate(self, model, rows, completion, *, image_paths=None):
         module = self.module
         calls = []
         payloads = []
@@ -435,24 +459,7 @@ class AutoReplyWorkerMlxTests(unittest.TestCase):
             del timeout
             calls.append(request.full_url)
             if request.full_url == "http://127.0.0.1:11234/v1/models":
-                return _Response(
-                    {
-                        "data": [
-                            {
-                                "id": self.QWEN36_35B_MODEL_ID,
-                                "owned_by": "mlx-serve",
-                                "loaded": True,
-                                "state": "ready",
-                            },
-                            {
-                                "id": self.SUSHI_MODEL_ID,
-                                "owned_by": "mlx-serve",
-                                "loaded": True,
-                                "state": "ready",
-                            },
-                        ]
-                    }
-                )
+                return _Response({"data": rows})
             if request.full_url == "http://127.0.0.1:11234/v1/chat/completions":
                 payloads.append(json.loads(request.data.decode("utf-8")))
                 return _Response(completion)
@@ -506,6 +513,89 @@ class AutoReplyWorkerMlxTests(unittest.TestCase):
             },
         )
         self.assertEqual(result, (1, b"", b"mlx_serve_response_model_mismatch"))
+
+    def test_local_generation_sends_only_the_requested_model_among_loaded_lookalikes(self):
+        cases = (
+            (
+                (self.DDALCU_FLASH_NEXT_MODEL_ID, self.SUSHI_MODEL_ID),
+                self.SUSHI_MODEL_ID,
+                self.DDALCU_FLASH_NEXT_MODEL_ID,
+            ),
+            (
+                (self.DDALCU_FLASH_NEXT_MODEL_ID, self.SUSHI_MODEL_ID),
+                self.DDALCU_FLASH_NEXT_MODEL_ID,
+                self.SUSHI_MODEL_ID,
+            ),
+            (
+                (self.SUSHI_MODEL_ID, self.DDALCU_FLASH_NEXT_MODEL_ID),
+                self.SUSHI_MODEL_ID,
+                self.DDALCU_FLASH_NEXT_MODEL_ID,
+            ),
+            (
+                (self.SUSHI_MODEL_ID, self.DDALCU_FLASH_NEXT_MODEL_ID),
+                self.DDALCU_FLASH_NEXT_MODEL_ID,
+                self.SUSHI_MODEL_ID,
+            ),
+            (
+                (self.SUSHI_4BPW_MODEL_ID, self.SUSHI_MODEL_ID),
+                self.SUSHI_MODEL_ID,
+                self.SUSHI_4BPW_MODEL_ID,
+            ),
+            (
+                (self.QWEN38_27B_8BIT_ROW_ID, self.QWEN38_27B_ROW_ID),
+                self.QWEN38_27B_ROW_ID,
+                self.QWEN38_27B_8BIT_ROW_ID,
+            ),
+        )
+        for listed, requested_row, other_row in cases:
+            rows = [self._gateway_row(model_id) for model_id in listed]
+            bare = requested_row.removeprefix("mlx/")
+            for selected_model in (bare, f"mlx/{bare}"):
+                with self.subTest(listed=listed, selected_model=selected_model):
+                    result, _calls, payloads = self._run_local_candidate(
+                        selected_model,
+                        rows,
+                        {"model": other_row, "choices": [{"message": {"content": "ok"}}]},
+                    )
+                    self.assertEqual(
+                        (result, [payload["model"] for payload in payloads]),
+                        ((1, b"", b"mlx_serve_response_model_mismatch"), [requested_row]),
+                    )
+
+                    result, _calls, payloads = self._run_local_candidate(
+                        selected_model,
+                        rows,
+                        {"model": requested_row, "choices": [{"message": {"content": "ok"}}]},
+                    )
+                    self.assertEqual(
+                        (result, [payload["model"] for payload in payloads]),
+                        ((0, b"ok", b""), [requested_row]),
+                    )
+
+    def test_local_generation_fails_closed_when_the_requested_model_is_not_loaded(self):
+        cases = (
+            (
+                self.SUSHI_MODEL_ID,
+                self.DDALCU_FLASH_NEXT_MODEL_ID,
+                [self._gateway_row(self.SUSHI_MODEL_ID, loaded=False)],
+            ),
+            (self.SUSHI_MODEL_ID, self.SUSHI_4BPW_MODEL_ID, []),
+            (self.DDALCU_FLASH_NEXT_MODEL_ID, self.SUSHI_MODEL_ID, []),
+            (self.QWEN38_27B_ROW_ID, self.QWEN38_27B_8BIT_ROW_ID, []),
+        )
+        for requested, loaded_lookalike, other_rows in cases:
+            rows = [self._gateway_row(loaded_lookalike), *other_rows]
+            with self.subTest(requested=requested, loaded=loaded_lookalike):
+                result, calls, payloads = self._run_local_candidate(
+                    requested,
+                    rows,
+                    {"model": loaded_lookalike, "choices": [{"message": {"content": "ok"}}]},
+                )
+                self.assertEqual(
+                    (result, [payload["model"] for payload in payloads]),
+                    ((1, b"", b"mlx_serve_text_model_not_advertised"), []),
+                )
+                self.assertNotIn("http://127.0.0.1:11234/v1/chat/completions", calls)
 
     def test_unlisted_local_model_stays_refused(self):
         module = self.module
