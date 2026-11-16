@@ -31,7 +31,7 @@
 use std::cell::{Cell, RefCell};
 
 use openkakao_cli::collector::{
-    AsideCollector, AsideTransport, Collected, CollectError, CollectFailure, CollectorPath,
+    AsideCollector, AsideTransport, CollectError, CollectFailure, Collected, CollectorPath,
     FallbackCollector, LoopbackEndpoint, RoutingCollector, SwitchReason, TempScope,
 };
 use openkakao_cli::fakes::VirtualClock;
@@ -96,7 +96,11 @@ struct RecordingTransport {
     saw_secret_ref: Cell<bool>,
 }
 impl AsideTransport for RecordingTransport {
-    fn health(&self, endpoint: &LoopbackEndpoint) -> Result<(), CollectError> {
+    fn health(
+        &self,
+        endpoint: &LoopbackEndpoint,
+        _bound: std::time::Duration,
+    ) -> Result<(), CollectError> {
         self.endpoints_seen.borrow_mut().push(endpoint.clone());
         self.clock.advance_ms(10);
         Ok(())
@@ -108,6 +112,7 @@ impl AsideTransport for RecordingTransport {
         url: &str,
         session: Option<&Secret>,
         _scope: &mut TempScope,
+        _bound: std::time::Duration,
     ) -> Result<Collected, CollectError> {
         self.endpoints_seen.borrow_mut().push(endpoint.clone());
         // The secret is available by reference — record that it arrived, but
@@ -159,7 +164,7 @@ struct MemLedger {
     inner: openkakao_cli::forward::SqliteDeliveryLedger,
 }
 impl DeliveryLedger for MemLedger {
-    fn is_delivered(&self, chat_id: i64, link_key: &str) -> bool {
+    fn is_delivered(&self, chat_id: i64, link_key: &str) -> Result<bool, LedgerError> {
         self.inner.is_delivered(chat_id, link_key)
     }
     fn mark(&self, chat_id: i64, link_key: &str, at: i64) -> Result<(), LedgerError> {

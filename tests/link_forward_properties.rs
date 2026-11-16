@@ -27,7 +27,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use openkakao_cli::collector::{
-    Collected, CollectError, CollectFailure, CollectorPath, PageCollector, RoutingCollector,
+    CollectError, CollectFailure, Collected, CollectorPath, PageCollector, RoutingCollector,
     TempScope,
 };
 use openkakao_cli::fakes::{BlockingRealSendPort, ForbiddenNetwork, VirtualClock};
@@ -39,7 +39,7 @@ use openkakao_cli::forward::{
 };
 use openkakao_cli::logging::{FlowKind, HistoryStore, SqliteHistoryStore};
 use openkakao_cli::ports::{
-    AcquireError, ImageAcquisition, ImageAcquirer, ImageBlob, ImageRef, NetworkPort, SendPort,
+    AcquireError, ImageAcquirer, ImageAcquisition, ImageBlob, ImageRef, NetworkPort, SendPort,
 };
 use openkakao_cli::room_catalog::{CatalogRoom, InMemoryRoomCatalog, MapRoomDirectory};
 use proptest::prelude::*;
@@ -269,7 +269,12 @@ impl MentionSpec {
                 } else {
                     base.to_string()
                 };
-                format!("{}{}{}", " ".repeat(*pad_left), base, " ".repeat(*pad_right))
+                format!(
+                    "{}{}{}",
+                    " ".repeat(*pad_left),
+                    base,
+                    " ".repeat(*pad_right)
+                )
             }
             MentionSpec::Junk(s) => s.clone(),
         }
@@ -543,12 +548,14 @@ proptest! {
 
     /// Property 19: for a source post with 0..=20 images and a delivered count
     /// no greater than the per-post ceiling, the delivery is a complete `Sent`
-    /// exactly when every source image was delivered; any shortfall (including
-    /// the images dropped over the 10-per-post cap) is a partial failure that
-    /// names the missing count, is never marked delivered, and so stays
-    /// retryable (R6.4, R6.5, R6.6, R6.14, R12.6).
+    /// exactly when every image under the 10-per-post cap was delivered (the
+    /// ones over it are reported as dropped and never sent, so they cannot
+    /// block completion and a re-forward sends nothing, R6.7); any shortfall
+    /// under the cap is a partial failure that names the missing count, is
+    /// never marked delivered, and so stays retryable (R6.4, R6.5, R6.6,
+    /// R6.14, R12.6).
     ///
-    /// Validates: Requirements 6.4, 6.5, 6.6, 6.14, 12.6
+    /// Validates: Requirements 6.4, 6.5, 6.6, 6.7, 6.14, 12.6
     #[test]
     fn image_counts_match_or_missing_is_explicit(
         source in 0usize..=20,
@@ -586,7 +593,8 @@ proptest! {
         });
 
         let key = canonical_link_key("https://x.com/a");
-        let complete = source == delivered;
+        let included = source.min(MAX_IMAGES_PER_POST);
+        let complete = included == delivered;
 
         match outcome {
             ForwardOutcome::Ran { links } => {
@@ -607,18 +615,18 @@ proptest! {
                             DeliveryResult::Sent { images } => {
                                 prop_assert!(complete, "marked Sent on an image mismatch");
                                 prop_assert!(images.is_complete());
-                                prop_assert_eq!(images.source, source);
+                                prop_assert_eq!(images.source, included);
                                 prop_assert_eq!(images.delivered, delivered);
                                 // Complete ⇒ recorded as delivered (R6.14).
-                                prop_assert!(ledger.is_delivered(1, &key));
+                                prop_assert!(ledger.is_delivered(1, &key).unwrap());
                             }
                             DeliveryResult::PartialFailure { images, miss_reasons } => {
                                 prop_assert!(!complete, "partial failure on a complete delivery");
-                                prop_assert_eq!(images.missing(), source - delivered);
+                                prop_assert_eq!(images.missing(), included - delivered);
                                 // A miss must always be explained (R6.6, R12.6).
                                 prop_assert!(!miss_reasons.is_empty());
                                 // Partial ⇒ not recorded, so it stays retryable.
-                                prop_assert!(!ledger.is_delivered(1, &key));
+                                prop_assert!(!ledger.is_delivered(1, &key).unwrap());
                             }
                             other => prop_assert!(false, "unexpected result: {other:?}"),
                         }
@@ -649,7 +657,8 @@ enum Repeat {
     Same,
     /// The same link with a trailing slash (a canonical-key match).
     TrailingSlash,
-    /// The same link upper-cased (a canonical-key match).
+    /// The same link with its scheme and host upper-cased (a canonical-key
+    /// match; the path stays case-sensitive).
     UpperCase,
 }
 
@@ -666,7 +675,7 @@ proptest! {
 
     /// Property 21: repeating the same forward request (with app-restart-like
     /// rebuilds of the forwarder over the same persistent ledger, and
-    /// case/trailing-slash link variants) up to 20 times delivers each (link,
+    /// scheme/host-case and trailing-slash link variants) up to 20 times delivers each (link,
     /// room) pair at most once — every repeat after the first reports
     /// `AlreadyDelivered` with zero new sends, and the total confirmed sends
     /// equals the number of target rooms (R6.7, R6.14, R12.7).
@@ -700,7 +709,7 @@ proptest! {
             let link = match repeat {
                 Repeat::Same => base.to_string(),
                 Repeat::TrailingSlash => format!("{base}/"),
-                Repeat::UpperCase => base.to_uppercase(),
+                Repeat::UpperCase => "HTTPS://EXAMPLE.COM/Post".to_string(),
             };
 
             // A fresh forwarder each iteration models an app restart while the
@@ -747,7 +756,7 @@ proptest! {
         // Exactly one confirmed send per room, regardless of repeat count.
         prop_assert_eq!(sender.send_count(), room_count);
         for (chat_id, _) in &rooms {
-            prop_assert!(ledger.is_delivered(*chat_id, &key));
+            prop_assert!(ledger.is_delivered(*chat_id, &key).unwrap());
         }
 
         trip.assert_untouched()?;

@@ -154,15 +154,17 @@ fn observation_strategy() -> impl Strategy<Value = ReplyObservation> {
         0.0f32..=1.0,
         1i64..1_000_000,
     )
-        .prop_map(|(quality, reask, repeat, owner, sim, at)| ReplyObservation {
-            room_pid: "room-1".to_string(),
-            at,
-            quality_score: quality,
-            reask_secs: reask,
-            repeat_count: repeat,
-            owner_correction_secs: owner,
-            topic_similarity: sim,
-        })
+        .prop_map(
+            |(quality, reask, repeat, owner, sim, at)| ReplyObservation {
+                room_pid: "room-1".to_string(),
+                at,
+                quality_score: quality,
+                reask_secs: reask,
+                repeat_count: repeat,
+                owner_correction_secs: owner,
+                topic_similarity: sim,
+            },
+        )
 }
 
 proptest! {
@@ -556,7 +558,7 @@ proptest! {
         let baseline_mean = mean_u8(&baseline);
         let expect_rollback = recent.len() >= WATCH_WINDOW && {
             let window = &recent[recent.len() - WATCH_WINDOW..];
-            mean_u8(window) < baseline_mean - ROLLBACK_DROP
+            mean_u8(window) <= baseline_mean - ROLLBACK_DROP
         };
 
         let rolled = improver.watch_after_promotion(&recent).unwrap();

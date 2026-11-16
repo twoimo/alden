@@ -90,7 +90,8 @@ pub struct GeekNewsCursor {
     /// The highest topic id observed in the feed.
     #[serde(default)]
     pub newest_id: u32,
-    /// Topic ids already posted (kept sorted, capped at [`SEEN_CAP`]).
+    /// Topic ids already posted, capped at [`SEEN_CAP`]. This module writes
+    /// them sorted, but a cursor from another producer may not be.
     #[serde(default)]
     pub seen_ids: Vec<u32>,
     /// `day:name` markers of slots already posted (capped at [`SLOTS_CAP`]).
@@ -120,7 +121,7 @@ impl Default for GeekNewsCursor {
 impl GeekNewsCursor {
     /// True when `id` has already been posted.
     pub fn has_seen(&self, id: u32) -> bool {
-        self.seen_ids.binary_search(&id).is_ok()
+        self.seen_ids.contains(&id)
     }
 
     /// True when the slot `marker` (`day:name`) has already been posted.
@@ -132,13 +133,7 @@ impl GeekNewsCursor {
     /// `newest_id`, the slot `marker` recorded as posted, and `updated_at` set.
     /// Seen ids stay sorted/deduped and both lists are capped. This is a pure
     /// transform: it never touches any store.
-    fn committed(
-        &self,
-        ids: &[u32],
-        newest: u32,
-        marker: &str,
-        now: i64,
-    ) -> GeekNewsCursor {
+    fn committed(&self, ids: &[u32], newest: u32, marker: &str, now: i64) -> GeekNewsCursor {
         let mut seen: BTreeSet<u32> = self.seen_ids.iter().copied().collect();
         seen.extend(ids.iter().copied());
         // Keep only the most recent SEEN_CAP ids (largest ids are newest).

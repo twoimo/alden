@@ -135,13 +135,13 @@ class FallbackLeaseTests(unittest.TestCase):
         end = source.index(chr(10) + "def ", start + 1)
         body = source[start:end]
         self.assertNotIn("for fb_model in _reply_fallback_candidates():", body)
-        # The chain is consulted from five places: the cooldown branch for each
-        # runner kind, the opencodex primary-limit branch, the timeout branch,
-        # and the opencode-go quota branch. The count used to be three; the
-        # extra two arrived with the runner-specific cooldown paths and this
-        # assertion was left behind (2026-09-16).
-        self.assertEqual(body.count("_model_fallback_chain("), 5)
-        self.assertEqual(body.count('lease_token = winner["lease_token"]'), 3)
+        # generate_reply names the chain once, in `fallback_winner`, and moves a
+        # failed attempt onto its winner once, in `continue_on_fallback`. The
+        # cooldown, primary-limit, timeout, and quota branches all go through
+        # those two. tests/test_auto_reply_send_path.py checks each branch by
+        # what it does.
+        self.assertEqual(body.count("_model_fallback_chain("), 1)
+        self.assertEqual(body.count('lease_token = winner["lease_token"]'), 1)
 
     def test_rate_limit_spelling_matches_the_classifier(self):
         """The chain gate must test the class the classifier actually returns."""

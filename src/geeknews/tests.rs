@@ -329,3 +329,16 @@ fn cursor_json_roundtrips_existing_shape() {
     let reparsed: GeekNewsCursor = serde_json::from_str(&back).expect("reparse");
     assert_eq!(cursor, reparsed);
 }
+
+#[test]
+fn unsorted_cursor_from_another_producer_still_dedups() {
+    let raw = r#"{"feed":"https://news.hada.io/rss/news","newest_id":30,"seen_ids":[30,10,20],"posted_slots":[],"updated_at":0}"#;
+    let cursor: GeekNewsCursor = serde_json::from_str(raw).expect("parse");
+    for id in [10, 20, 30] {
+        assert!(
+            cursor.has_seen(id),
+            "id {id} was posted but reads as unseen"
+        );
+    }
+    assert!(!cursor.has_seen(40));
+}
