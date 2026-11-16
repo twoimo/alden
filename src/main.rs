@@ -815,7 +815,9 @@ enum Commands {
         dry_run: bool,
     },
     /// Read recent messages via AX automation (no server contact, no local
-    /// DB access — scrapes the open KakaoTalk chat window directly)
+    /// DB access — scrapes the open KakaoTalk chat window directly). Requires
+    /// safety.allow_ax_send: opening a chat that is not already open presses
+    /// Return in KakaoTalk.
     AxRead {
         chat_name: String,
         #[arg(short = 'n', long, default_value_t = 20)]
@@ -997,7 +999,9 @@ const SERVER_LOGIN_WARNING: &str = "\
 ⚠️  Server login (login --save / login --manual) is broken on recent
    KakaoTalk macOS builds. Do NOT repeatedly retry login on an unregistered
    device — it can get your account's sub-device login blocked. Prefer
-   'local-send'/'ax-read'/'local-chats' — no server contact needed. See README.";
+   'local-send'/'ax-read'/'local-chats' — no server contact needed.
+   'local-send' and 'ax-read' need safety.allow_ax_send, because they can
+   press Return in KakaoTalk. See README.";
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
