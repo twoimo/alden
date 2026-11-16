@@ -220,6 +220,15 @@ BEGIN
 END;
 "#;
 
+pub(super) const AUTO_REPLY_REPLY_JOBS_KEEP_SEND_AUTHORITY_TRIGGER_SQL: &str = r#"
+CREATE TRIGGER trg_reply_jobs_keep_send_authority
+BEFORE UPDATE OF ax_mutation_authorized ON reply_jobs
+WHEN OLD.ax_mutation_authorized = 1 AND NEW.ax_mutation_authorized = 0
+BEGIN
+  SELECT RAISE(ABORT, 'reply job send authority cannot be cleared');
+END;
+"#;
+
 pub(super) const AUTO_REPLY_PIPELINE_TRANSITIONS_CAP_TRIGGER_SQL: &str = r#"
 CREATE TRIGGER trg_pipeline_transitions_cap
 AFTER INSERT ON pipeline_transitions
@@ -340,7 +349,7 @@ enum QueueLayout {
     Legacy,
     /// v2: the transition journal and the per-job attempt authority.
     Journal,
-    /// v3: v2 plus the per-job send authority.
+    /// v3: v2 plus the per-job send authority and the trigger that keeps it set.
     SendAuthority,
 }
 
@@ -606,6 +615,13 @@ pub(super) fn validate_stopped_clean_queue(queue_path: &Path, expected_chat_id: 
             ),
         ]);
     }
+    if layout == QueueLayout::SendAuthority {
+        expected_schema_objects.push((
+            "trigger",
+            "trg_reply_jobs_keep_send_authority",
+            AUTO_REPLY_REPLY_JOBS_KEEP_SEND_AUTHORITY_TRIGGER_SQL,
+        ));
+    }
     expected_schema_objects.sort_by_key(|(kind, name, _)| (*kind, *name));
     if schema_objects.len() != expected_schema_objects.len()
         || schema_objects.iter().zip(&expected_schema_objects).any(
@@ -666,7 +682,7 @@ pub(super) fn validate_stopped_clean_queue(queue_path: &Path, expected_chat_id: 
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     if has_transition_journal {
-        let expected_triggers = [
+        let mut expected_triggers = vec![
             (
                 "trg_pipeline_transitions_cap",
                 "pipeline_transitions",
@@ -683,6 +699,16 @@ pub(super) fn validate_stopped_clean_queue(queue_path: &Path, expected_chat_id: 
                 update_trigger_sql,
             ),
         ];
+        if layout == QueueLayout::SendAuthority {
+            expected_triggers.insert(
+                1,
+                (
+                    "trg_reply_jobs_keep_send_authority",
+                    "reply_jobs",
+                    AUTO_REPLY_REPLY_JOBS_KEEP_SEND_AUTHORITY_TRIGGER_SQL,
+                ),
+            );
+        }
         if triggers.len() != expected_triggers.len()
             || triggers.iter().zip(expected_triggers).any(
                 |((name, table, sql), (expected_name, expected_table, expected_sql))| {
@@ -816,7 +842,8 @@ pub(super) fn validate_stopped_clean_queue(queue_path: &Path, expected_chat_id: 
     if layout == QueueLayout::SendAuthority {
         let invalid_authority: i64 = connection.query_row(
             "SELECT COUNT(*) FROM reply_jobs WHERE \
-             typeof(ax_mutation_authorized) != 'integer' OR ax_mutation_authorized NOT IN (0, 1)",
+             typeof(ax_mutation_authorized) != 'integer' OR ax_mutation_authorized NOT IN (0, 1) \
+             OR (status = 'sending' AND ax_mutation_authorized = 0)",
             [],
             |row| row.get(0),
         )?;

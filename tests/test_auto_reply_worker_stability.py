@@ -560,10 +560,6 @@ class PortabilityTests(unittest.TestCase):
         self.assertEqual(re.findall(r"/Users/[^/\s\"']+/\S*", source), [])
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class GeekNewsReadbackTests(unittest.TestCase):
     def _fake_cli(self, directory: Path, body: str) -> Path:
         script = directory / "openkakao-cli"
@@ -600,3 +596,7 @@ class GeekNewsReadbackTests(unittest.TestCase):
         self.assertIn("binary_unavailable", report)
         self.assertIn("exit_3", report)
         self.assertNotIn("secret-body", report)
+
+
+if __name__ == "__main__":
+    unittest.main()

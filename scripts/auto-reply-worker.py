@@ -13662,7 +13662,14 @@ def send_reply(
         return False
     if os.environ.get("OPENKAKAO_HOOK_DRY_RUN") == "1":
         return True
-    if event is None or numeric_author_identity_status(event) != "allowed":
+    # Without its queue row the job cannot be committed to `sending` before
+    # Return, so nothing would record that this reply may have been posted.
+    if (
+        event is None
+        or not event_id
+        or connection is None
+        or numeric_author_identity_status(event) != "allowed"
+    ):
         return False
     if _WORKER_HEALTH is not None and not _WORKER_HEALTH.local_ready():
         return False
@@ -13736,31 +13743,30 @@ def send_reply(
             if hold_out is not None:
                 hold_out.append(hold)
             return False
-    if event is not None and event_id and connection is not None:
-        _journal_checkpoint(
-            connection,
-            event_id,
-            component="pre_send",
-            from_state="processing",
-            to_state="ready",
-            code="pre_send_check",
-            source_epoch=_journal_source_epoch(event),
-        )
-        transition = transition_processing_job(
-            event_id,
-            connection=connection,
-            status="sending",
-            error_class=None,
-            journal_checkpoint=(
-                "ax",
-                "ready",
-                "sending",
-                "ax_mutation_authorized",
-            ),
-            journal_source_epoch=_journal_source_epoch(event),
-        )
-        if transition != "updated":
-            return False
+    _journal_checkpoint(
+        connection,
+        event_id,
+        component="pre_send",
+        from_state="processing",
+        to_state="ready",
+        code="pre_send_check",
+        source_epoch=_journal_source_epoch(event),
+    )
+    transition = transition_processing_job(
+        event_id,
+        connection=connection,
+        status="sending",
+        error_class=None,
+        journal_checkpoint=(
+            "ax",
+            "ready",
+            "sending",
+            "ax_mutation_authorized",
+        ),
+        journal_source_epoch=_journal_source_epoch(event),
+    )
+    if transition != "updated":
+        return False
     # Only now may this reply end up in the composer, so only now may the CLI
     # treat a composer holding it as the worker's own leftover.
     _allow_composer_draft(composer_allowlist_path, reply)

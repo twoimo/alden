@@ -187,6 +187,24 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
             connection.close()
         return module._queue_connection()
 
+    @contextmanager
+    def _claimed_job(self, module, event, reply):
+        """Hold `event` as the claimed job `send_reply` commits to `sending`."""
+        with tempfile.TemporaryDirectory() as temporary:
+            self._point_queue(module, Path(temporary))
+            connection = self._worker_queue_connection(module)
+            try:
+                now = time.time()
+                connection.execute(
+                    "INSERT INTO reply_jobs(event_id,event_json,status,reply,"
+                    "created_at,updated_at) VALUES (?,?,'processing',?,?,?)",
+                    (event["event_id"], json.dumps(event, ensure_ascii=False), reply, now, now),
+                )
+                connection.commit()
+                yield connection
+            finally:
+                connection.close()
+
     @staticmethod
     def _load_db_watch_module(name):
         spec = importlib.util.spec_from_file_location(
@@ -12605,11 +12623,14 @@ print(json.dumps({
                 return_value=True,
             ),
             mock.patch.object(module, "_run_bounded_process", side_effect=fake_run),
+            self._claimed_job(module, event, "reply") as connection,
         ):
             self.assertTrue(
                 module.send_reply(
                     "reply",
                     event=event,
+                    event_id=event["event_id"],
+                    connection=connection,
                     expected_target_chat_id=42,
                     expected_owner="owner",
                     expected_epoch=7,
@@ -12682,11 +12703,14 @@ print(json.dumps({
             ),
             mock.patch.object(module, "PRE_SEND_PREFLIGHT_RETRY_SECONDS", 0),
             mock.patch.object(module, "_run_bounded_process", side_effect=fake_run),
+            self._claimed_job(module, event, "reply") as connection,
         ):
             self.assertTrue(
                 module.send_reply(
                     "reply",
                     event=event,
+                    event_id=event["event_id"],
+                    connection=connection,
                     expected_target_chat_id=42,
                     expected_owner="owner",
                     expected_epoch=7,
@@ -13228,11 +13252,14 @@ print(json.dumps({
                 return_value=True,
             ),
             mock.patch.object(module, "_run_bounded_process", side_effect=fake_run),
+            self._claimed_job(module, event, "reply") as connection,
         ):
             self.assertFalse(
                 module.send_reply(
                     "reply",
                     event=event,
+                    event_id=event["event_id"],
+                    connection=connection,
                     expected_target_chat_id=42,
                     expected_owner="owner",
                     expected_epoch=7,

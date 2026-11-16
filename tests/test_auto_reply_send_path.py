@@ -660,7 +660,7 @@ class SendPathCase(unittest.TestCase):
             self.module.process_job(job, previous_status, self.connection)
         return captured.getvalue()
 
-    def send_reply(self, reply: str, event: dict):
+    def send_reply(self, reply: str, event: dict, **queue_identity):
         """Call the send boundary directly; returns (sent, holds, log)."""
         holds: list[str] = []
         captured = io.StringIO()
@@ -668,8 +668,11 @@ class SendPathCase(unittest.TestCase):
             sent = self.module.send_reply(
                 reply,
                 event=event,
-                event_id=event["event_id"],
-                connection=self.connection,
+                **{
+                    "event_id": event["event_id"],
+                    "connection": self.connection,
+                    **queue_identity,
+                },
                 expected_target_chat_id=CHAT_ID,
                 expected_owner=OWNER,
                 expected_epoch=EPOCH,
@@ -1490,6 +1493,26 @@ class SendBoundaryTests(SendPathCase):
                 "OPENKAKAO_COMPOSER_ALLOWLIST": str(self.room / "composer-allowlist.json"),
             },
         )
+
+    def test_send_without_its_queue_row_is_refused_before_any_command(self):
+        event = self.inbound(712)
+        self.due_draft(event, REPLY)
+        for label, missing in (
+            ("no queue connection", {"connection": None}),
+            ("no event id", {"event_id": ""}),
+        ):
+            with self.subTest(missing=label):
+                sent, holds, _log = self.send_reply(REPLY, event, **missing)
+
+                self.assertFalse(sent)
+                self.assertEqual((holds, self.cli.calls), ([], []))
+                self.assertEqual(self.status(event["event_id"]), "processing")
+
+        sent, _holds, _log = self.send_reply(REPLY, event)
+
+        self.assertTrue(sent)
+        self.assertEqual(len(self.cli.sends()), 1)
+        self.assertEqual(self.status(event["event_id"]), "sending")
 
     def test_job_that_is_already_sending_is_never_composed_again(self):
         event = self.inbound(707)

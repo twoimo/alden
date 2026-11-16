@@ -815,7 +815,9 @@ enum Commands {
         dry_run: bool,
     },
     /// Read recent messages via AX automation (no server contact, no local
-    /// DB access — scrapes the open KakaoTalk chat window directly)
+    /// DB access — scrapes the open KakaoTalk chat window directly). Requires
+    /// safety.allow_ax_send: opening a chat that is not already open presses
+    /// Return in KakaoTalk.
     AxRead {
         chat_name: String,
         #[arg(short = 'n', long, default_value_t = 20)]
@@ -993,6 +995,14 @@ fn is_local_only_command(command: &Commands) -> bool {
     )
 }
 
+const SERVER_LOGIN_WARNING: &str = "\
+⚠️  Server login (login --save / login --manual) is broken on recent
+   KakaoTalk macOS builds. Do NOT repeatedly retry login on an unregistered
+   device — it can get your account's sub-device login blocked. Prefer
+   'local-send'/'ax-read'/'local-chats' — no server contact needed.
+   'local-send' and 'ax-read' need safety.allow_ax_send, because they can
+   press Return in KakaoTalk. See README.";
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     // The record window's data source must work while the config is broken:
@@ -1054,12 +1064,7 @@ fn main() -> Result<()> {
     if std::env::var_os("OPENKAKAO_CLI_NO_DEPRECATION").is_none()
         && !is_local_only_command(&cli.command)
     {
-        eprintln!("⚠️  Server login (login --save / login --manual) is broken on recent");
-        eprintln!("   KakaoTalk macOS builds. Do NOT repeatedly retry login on an unregistered");
-        eprintln!("   device — it can get your account's sub-device login blocked. Prefer");
-        eprintln!(
-            "   'local-send'/'ax-read'/'local-chats' — no server contact needed. See README."
-        );
+        eprintln!("{SERVER_LOGIN_WARNING}");
     }
 
     match cli.command {
@@ -2888,6 +2893,27 @@ mod tests {
             "--dry-run",
         ])
         .is_err());
+    }
+
+    #[test]
+    fn ax_read_help_and_login_warning_name_its_send_gate() {
+        let mut cli = Cli::command();
+        let help = cli
+            .find_subcommand_mut("ax-read")
+            .expect("ax-read is a subcommand")
+            .render_help()
+            .to_string();
+        assert!(
+            help.contains("allow_ax_send") && help.contains("Return"),
+            "{help}"
+        );
+        let ax_read_mention = SERVER_LOGIN_WARNING
+            .find("ax-read")
+            .expect("the warning recommends ax-read");
+        assert!(
+            SERVER_LOGIN_WARNING[ax_read_mention..].contains("allow_ax_send"),
+            "{SERVER_LOGIN_WARNING}"
+        );
     }
 
     #[test]
