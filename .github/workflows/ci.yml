@@ -158,7 +158,7 @@ jobs:
         run: |
           PY="$(python3 -c 'import os, sys; print(os.path.realpath(sys.executable))')"
           ls -l "$PY"
-          chmod go-w "$PY"
+          sudo chmod go-w "$PY"
           ls -l "$PY"
 
       - name: Run focused local AI tests
