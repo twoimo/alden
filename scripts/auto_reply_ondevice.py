@@ -1096,21 +1096,38 @@ def detect_local_qwen_models(home: Path | None = None) -> dict[str, str]:
     return found
 
 
-def _model_id(models: Sequence[dict[str, Any]], marker: str) -> str:
-    wanted = marker.casefold()
+def _loaded_mlx_model_ids(models: Sequence[dict[str, Any]]) -> Iterator[str]:
     for item in models:
         model_id = str(item.get("id") or "").strip()
         owner = str(item.get("owned_by") or "").strip().casefold()
-        if not (model_id.startswith("mlx/") or owner == "mlx-serve"):
-            continue
-        if wanted not in model_id.casefold():
+        if not model_id or not (model_id.startswith("mlx/") or owner == "mlx-serve"):
             continue
         state = str(item.get("state") or "").strip().casefold()
         if item.get("loaded") is False or state in {"unloaded", "error", "failed"}:
             continue
-        if model_id:
-            return model_id
-    return ""
+        yield model_id
+
+
+def _model_id(models: Sequence[dict[str, Any]], marker: str) -> str:
+    wanted = marker.casefold()
+    return next(
+        (model_id for model_id in _loaded_mlx_model_ids(models) if wanted in model_id.casefold()),
+        "",
+    )
+
+
+def loaded_local_reply_model_id(models: Sequence[dict[str, Any]], requested: Any) -> str:
+    wanted = canonical_local_reply_model_id(requested)
+    if not wanted:
+        return ""
+    return next(
+        (
+            model_id
+            for model_id in _loaded_mlx_model_ids(models)
+            if canonical_local_reply_model_id(model_id) == wanted
+        ),
+        "",
+    )
 
 
 def _local_model_path(models: dict[str, str], marker: str) -> str:

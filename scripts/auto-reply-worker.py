@@ -72,10 +72,10 @@ from auto_reply_ondevice import (
     FLASH_NEXT_MODEL_ID,
     QWEN38_27B_FAMILY,
     QWEN38_27B_MODEL_ID,
-    _model_id as _ondevice_model_id,
     canonical_local_reply_model_id,
     detect_mlx_gateway_models,
     discover_mlx_gateway,
+    loaded_local_reply_model_id,
     local_reply_model_family,
 )
 
@@ -11714,9 +11714,7 @@ def _run_opencodex_generation_unleased(
         if not gateway_base_url:
             return 1, b"", b"mlx_serve_gateway_unavailable"
         advertised = detect_mlx_gateway_models(base_url=gateway_base_url)
-        advertised_model = _ondevice_model_id(
-            advertised, local_reply_model_family(target_model)
-        )
+        advertised_model = loaded_local_reply_model_id(advertised, model)
         if not advertised_model:
             reason = (
                 b"mlx_serve_vision_model_not_resident"
@@ -11816,7 +11814,7 @@ def _run_opencodex_generation_unleased(
             response_model = body.get("model")
             if isinstance(response_model, str) and response_model.strip() and (
                 canonical_local_reply_model_id(response_model)
-                != canonical_local_reply_model_id(target_model)
+                != canonical_local_reply_model_id(model)
             ):
                 return 1, b"", b"mlx_serve_response_model_mismatch"
         content = str(body["choices"][0]["message"]["content"])
