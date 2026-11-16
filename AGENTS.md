@@ -104,8 +104,9 @@ openkakao-cli auto-reply --chat 'bind:417780809780519:부자멘토멘티' --chec
 - Interactive terminals may omit `--model` and pick the model with the arrow keys.
 - `auto-reply` is foreground-only. `Ctrl-C` stops the workers it started.
 - `auto-reply-host` (`--status`, `--bake`, `--tick --manifest <file> --state-root <dir>`) is
-  the Kakao-blind unattended host run by the session monitor. It only opens Terminal and
-  never owns AX send. The session monitor is the only unattended host.
+  the Kakao-blind unattended host run by the session monitor LaunchAgent. Its tick starts
+  the pinned session command with `/bin/sh`, not Terminal, and never owns AX send. The
+  session monitor is the only unattended host.
 
 ## Product rules the code must keep
 
