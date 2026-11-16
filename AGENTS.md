@@ -25,7 +25,7 @@ Run the gate that matches what you touched. These are the CI commands.
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 cargo test
-python3 -m unittest tests.test_auto_reply_worker_mlx   # name the modules you touched
+python3.11 -m unittest tests.test_auto_reply_worker_mlx   # CI uses 3.11; macOS python3 is 3.9
 sh scripts/test-auto-reply-launchd-artifacts.sh
 (cd desktop && npm test -- --run && npm run build)
 OPENKAKAO_TAURI_SOURCE_CHECK=1 cargo test --manifest-path desktop/src-tauri/Cargo.toml --locked
