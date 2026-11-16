@@ -140,8 +140,9 @@ CREATE TABLE reply_jobs(
 )
 """
 # 1 once the job was committed to `sending`, after which Return may have been
-# pressed. The job row owns this fact because pipeline_transitions is a rolling
-# window: the cap trigger drops a job's rows once newer rows fill it.
+# pressed, and never 0 again. The job row owns this fact because
+# pipeline_transitions is a rolling window: the cap trigger drops a job's rows
+# once newer rows fill it.
 SEND_AUTHORITY_COLUMN_SQL: Final = (
     "ax_mutation_authorized INTEGER NOT NULL DEFAULT 0 "
     "CHECK(ax_mutation_authorized IN (0, 1))"
@@ -292,6 +293,7 @@ CREATE_JOURNAL_INDEX_SQL: Final = (
 TRIGGER_INSERT: Final = "trg_reply_jobs_transition_insert"
 TRIGGER_UPDATE: Final = "trg_reply_jobs_transition_update"
 TRIGGER_CAP: Final = "trg_pipeline_transitions_cap"
+TRIGGER_KEEP_SEND_AUTHORITY: Final = "trg_reply_jobs_keep_send_authority"
 
 
 def _trigger_timestamp_sql() -> str:
@@ -379,6 +381,14 @@ BEGIN
     'queue',OLD.status,NEW.status,'status_changed',
     {_source_epoch_sql('NEW')},{_trigger_timestamp_sql()}
   );
+END
+"""
+CREATE_KEEP_SEND_AUTHORITY_TRIGGER_SQL: Final = f"""
+CREATE TRIGGER {TRIGGER_KEEP_SEND_AUTHORITY}
+BEFORE UPDATE OF ax_mutation_authorized ON reply_jobs
+WHEN OLD.ax_mutation_authorized = 1 AND NEW.ax_mutation_authorized = 0
+BEGIN
+  SELECT RAISE(ABORT, 'reply job send authority cannot be cleared');
 END
 """
 CREATE_CAP_TRIGGER_SQL: Final = f"""
@@ -477,12 +487,16 @@ def _expected_v2_sql(*, include_model: bool) -> dict[tuple[str, str], str]:
 
 
 def _expected_v3_sql(*, include_model: bool) -> dict[tuple[str, str], str]:
-    return _expected_journal_sql(
+    expected = _expected_journal_sql(
         include_model=include_model,
         reply_jobs_sql=CREATE_REPLY_JOBS_V3_SQL,
         insert_trigger_sql=CREATE_INSERT_TRIGGER_SQL,
         update_trigger_sql=CREATE_UPDATE_TRIGGER_SQL,
     )
+    expected[("trigger", TRIGGER_KEEP_SEND_AUTHORITY)] = _normalize_sql(
+        CREATE_KEEP_SEND_AUTHORITY_TRIGGER_SQL
+    )
+    return expected
 
 
 def _table_info(
@@ -686,6 +700,7 @@ def _validate_queue_contents_body(
         SELECT COUNT(*) FROM reply_jobs
         WHERE typeof(ax_mutation_authorized) != 'integer'
            OR ax_mutation_authorized NOT IN (0, 1)
+           OR (status = 'sending' AND ax_mutation_authorized = 0)
         """
     ).fetchone()
     if (
@@ -773,7 +788,7 @@ def _upgrade_reply_jobs_to_v2(connection: sqlite3.Connection) -> None:
 
 
 def _add_send_authority(connection: sqlite3.Connection) -> None:
-    """Give every v2 job its send authority, then let both triggers keep it.
+    """Give every v2 job its send authority, then let the triggers keep it.
 
     A v2 job's only record of a send attempt was its journal rows, and the cap
     may already have deleted them. So a job is marked when its status still
@@ -801,6 +816,7 @@ def _add_send_authority(connection: sqlite3.Connection) -> None:
         connection.execute(f"DROP TRIGGER {trigger}")
     connection.execute(CREATE_INSERT_TRIGGER_SQL)
     connection.execute(CREATE_UPDATE_TRIGGER_SQL)
+    connection.execute(CREATE_KEEP_SEND_AUTHORITY_TRIGGER_SQL)
 
 
 def initialize_queue_schema(

@@ -44,7 +44,8 @@ use super::queue::{
     AUTO_REPLY_PIPELINE_TRANSITIONS_UPDATE_TRIGGER_V2_SQL,
     AUTO_REPLY_PIPELINE_TRANSITIONS_UPDATE_TRIGGER_V3_SQL, AUTO_REPLY_QUEUE_JOURNAL_MAX_ROWS,
     AUTO_REPLY_QUEUE_JOURNAL_USER_VERSION, AUTO_REPLY_QUEUE_LEGACY_USER_VERSION,
-    AUTO_REPLY_QUEUE_SEND_AUTHORITY_USER_VERSION, AUTO_REPLY_REPLY_JOBS_STATUS_INDEX_SQL,
+    AUTO_REPLY_QUEUE_SEND_AUTHORITY_USER_VERSION,
+    AUTO_REPLY_REPLY_JOBS_KEEP_SEND_AUTHORITY_TRIGGER_SQL, AUTO_REPLY_REPLY_JOBS_STATUS_INDEX_SQL,
     AUTO_REPLY_REPLY_JOBS_V2_TABLE_SQL,
 };
 use super::runner::{
@@ -1185,7 +1186,8 @@ fn stopped_clean_queue_v3_fixture_with_triggers(
              DROP TRIGGER trg_reply_jobs_transition_insert;
              DROP TRIGGER trg_reply_jobs_transition_update;
              {insert_trigger_sql}
-             {update_trigger_sql}"
+             {update_trigger_sql}
+             {AUTO_REPLY_REPLY_JOBS_KEEP_SEND_AUTHORITY_TRIGGER_SQL}"
         ))
         .expect("add the reply job send authority");
     connection
