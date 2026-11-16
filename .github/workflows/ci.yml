@@ -71,6 +71,9 @@ jobs:
 
       # The toolchain is pinned to 1.95.0 with the clippy component in
       # rust-toolchain.toml, so this gate cannot drift with the runner image.
+      - name: Check CLI crate formatting
+        run: cargo fmt --manifest-path $MANIFEST --check
+
       - name: Lint CLI crate (clippy)
         run: cargo clippy --manifest-path $MANIFEST --all-targets -- -D warnings
 
@@ -149,11 +152,15 @@ jobs:
         with:
           python-version: "3.11"
 
-      # Only 3 of the 348 tests in tests.test_auto_reply_cli_runtime run here.
-      # The others fail on a fresh checkout: they need
-      # ~/Library/Application Support/openkakao/context.sqlite or a model
-      # server on 127.0.0.1:11234, or they hit "transition queue room path
-      # mismatch" (2026-11-16).
+      # The hook launchers refuse an interpreter that group or others can
+      # write, as production does; the runner's toolcache Python is one.
+      - name: Make the test interpreter owner-writable only
+        run: |
+          PY="$(python3 -c 'import os, sys; print(os.path.realpath(sys.executable))')"
+          ls -l "$PY"
+          sudo chmod go-w "$PY"
+          ls -l "$PY"
+
       - name: Run focused local AI tests
         run: >-
           python3 -m unittest
@@ -174,9 +181,7 @@ jobs:
           tests.test_auto_reply_worker_stability
           tests.test_auto_reply_retry_policy
           tests.test_auto_reply_send_path
-          tests.test_auto_reply_cli_runtime.AutoReplyCliRuntimeTests.test_geeknews_operator_send_uses_bounded_exact_room_readback
-          tests.test_auto_reply_cli_runtime.AutoReplyCliRuntimeTests.test_geeknews_operator_does_not_confirm_an_old_matching_message_in_same_second
-          tests.test_auto_reply_cli_runtime.AutoReplyCliRuntimeTests.test_geeknews_operator_does_not_send_without_a_room_baseline
+          tests.test_auto_reply_cli_runtime
           tests.test_auto_reply_fallback_lease
           tests.test_auto_reply_reference_store
           tests.test_auto_reply_session_monitor

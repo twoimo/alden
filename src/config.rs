@@ -687,7 +687,11 @@ mod tests {
             "Vision AI 경진대회 extra",
             None
         ));
-        assert!(!allowed_send_chat_targets(&config, "Vision AI 경진대회 ", None));
+        assert!(!allowed_send_chat_targets(
+            &config,
+            "Vision AI 경진대회 ",
+            None
+        ));
 
         std::fs::write(
             dir.path().join("menubar-room-catalog.json"),
@@ -700,11 +704,8 @@ mod tests {
             Some(437046948660911)
         ));
 
-        std::fs::write(
-            dir.path().join("menubar-room-catalog.json"),
-            "{invalid",
-        )
-        .expect("write invalid catalog");
+        std::fs::write(dir.path().join("menubar-room-catalog.json"), "{invalid")
+            .expect("write invalid catalog");
         assert!(!allowed_send_chat_targets(
             &config,
             "Vision AI 경진대회",
@@ -737,7 +738,11 @@ mod tests {
         )
         .expect("write catalog");
         assert!(!allowed_send_chat_targets(&config, "", None));
-        assert!(!allowed_send_chat_targets(&config, "Vision AI 경진대회", None));
+        assert!(!allowed_send_chat_targets(
+            &config,
+            "Vision AI 경진대회",
+            None
+        ));
         // The room is still reachable through its numeric id.
         assert!(allowed_send_chat_targets(
             &config,
@@ -944,10 +949,7 @@ allow_link_fetch = true
         );
         assert!(config.safety.allow_auto_reply);
         assert!(unattended_auto_reply_enabled(&config));
-        assert_eq!(
-            config.auto_reply.chats,
-            ["bind:417780809780519:room"]
-        );
+        assert_eq!(config.auto_reply.chats, ["bind:417780809780519:room"]);
         assert_eq!(config.auto_reply.self_nickname.as_deref(), Some("self"));
         assert_eq!(config.auto_reply.reply_authors, ["author"]);
         assert!(config.auto_reply.allow_link_fetch);

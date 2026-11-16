@@ -1706,16 +1706,14 @@ fn main() -> Result<()> {
             require_allowed_send_chat(&config, &chat_name)?;
             commands::local_send::cmd_local_delete(&chat_name, &source, yes, dry_run, json)?
         }
-        Commands::AxRead { chat_name, count } => {
-            commands::ax_read::cmd_ax_read(
-                &config,
-                commands::ax_read::AxReadOptions {
-                    chat_name,
-                    count,
-                    json,
-                },
-            )?
-        }
+        Commands::AxRead { chat_name, count } => commands::ax_read::cmd_ax_read(
+            &config,
+            commands::ax_read::AxReadOptions {
+                chat_name,
+                count,
+                json,
+            },
+        )?,
         Commands::AxProbe {
             chat,
             dump,

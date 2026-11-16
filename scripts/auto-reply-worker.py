@@ -15839,6 +15839,9 @@ GEEKNEWS_MAX_SUMMARY_CHARS = 90
 GEEKNEWS_FEED_MAX_BYTES = 400_000
 GEEKNEWS_FEED_TIMEOUT_SECONDS = 8.0
 GEEKNEWS_CONFIRMATION_READ_COUNT = 100
+# 100 pretty-printed rows carry message text and raw attachment JSON, which
+# routinely exceeds the 64 KiB model-output cap.
+GEEKNEWS_CONFIRMATION_STDOUT_CAP = 4 * 1024 * 1024
 GEEKNEWS_CONFIRMATION_TIMEOUT_SECONDS = 8.0
 GEEKNEWS_SEND_TIMEOUT_SECONDS = 60.0
 GEEKNEWS_SLOT_TZ = ZoneInfo("Asia/Seoul")
@@ -17312,6 +17315,11 @@ def _geeknews_operator_room(chat: str, queue_path: Path) -> tuple[int, str] | No
     return chat_id, title
 
 
+def _geeknews_readback_unavailable(reason: str) -> None:
+    print(f"[geeknews] room readback unavailable: {reason}", file=sys.stderr)
+    return None
+
+
 def _geeknews_confirmation_rows(bin_path: str, chat_id: int) -> list[dict] | None:
     """Read one room with bounded work; None means the snapshot was unusable."""
     try:
@@ -17327,24 +17335,25 @@ def _geeknews_confirmation_rows(bin_path: str, chat_id: int) -> list[dict] | Non
             cwd=ROOT,
             env=os.environ.copy(),
             timeout=GEEKNEWS_CONFIRMATION_TIMEOUT_SECONDS,
-            stdout_cap=MAX_MODEL_OUTPUT_BYTES,
+            stdout_cap=GEEKNEWS_CONFIRMATION_STDOUT_CAP,
             stderr_cap=MAX_MODEL_STDERR_BYTES,
         )
-    except (
-        OSError,
-        subprocess.TimeoutExpired,
-        _CaptureOverflow,
-        _CaptureIOError,
-    ):
-        return None
+    except OSError:
+        return _geeknews_readback_unavailable("binary_unavailable")
+    except subprocess.TimeoutExpired:
+        return _geeknews_readback_unavailable("timeout")
+    except _CaptureOverflow:
+        return _geeknews_readback_unavailable("output_over_cap")
+    except _CaptureIOError:
+        return _geeknews_readback_unavailable("capture_io_error")
     if returncode != 0:
-        return None
+        return _geeknews_readback_unavailable(f"exit_{returncode}")
     try:
         rows = json.loads(stdout_bytes.decode("utf-8"))
     except (UnicodeError, json.JSONDecodeError):
-        return None
+        return _geeknews_readback_unavailable("invalid_json")
     if not isinstance(rows, list):
-        return None
+        return _geeknews_readback_unavailable("not_a_list")
     for row in rows:
         if (
             not isinstance(row, dict)
@@ -17355,7 +17364,7 @@ def _geeknews_confirmation_rows(bin_path: str, chat_id: int) -> list[dict] | Non
             or not isinstance(row.get("log_id"), int)
             or row["log_id"] <= 0
         ):
-            return None
+            return _geeknews_readback_unavailable("row_outside_room")
     return rows
 
 
