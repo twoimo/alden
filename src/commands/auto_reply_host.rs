@@ -1,7 +1,7 @@
 //! Product CLI surface for the session-monitor host.
 //!
 //! Bake/status/disable wrap the existing Kakao-blind packager. `--tick` is the
-//! LaunchAgent one-shot: it may open Terminal on a digest-pinned `.command`
+//! LaunchAgent one-shot: it may start a digest-pinned `.command` with `/bin/sh`
 //! and never reads KakaoTalk, AX, or the reply queue.
 
 use std::fs::{self, File, OpenOptions};
@@ -350,7 +350,7 @@ fn run_tick(manifest: &Path, state_root: &Path) -> Result<i32> {
     // Gatekeeper asks the operator to allow the launcher on every restart while
     // the file carries com.apple.quarantine, and a sandboxed packager cannot
     // remove that flag. The tick runs from launchd, so it clears the flag for the
-    // whole runtime directory here, before Terminal is asked to open anything.
+    // whole runtime directory here, before the launcher is started.
     if let Some(runtime_root) = command_path.parent() {
         let _ = Command::new("/usr/bin/xattr")
             .arg("-dr")
