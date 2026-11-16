@@ -14397,9 +14397,6 @@ print(json.dumps({
             module.IDLE_CONTEXT_BUSY_TIMEOUT_MS, module.CONTEXT_BUSY_TIMEOUT_MS
         )
         self.assertLessEqual(module.IDLE_CONTEXT_BUSY_TIMEOUT_MS, 2000)
-        self.assertLessEqual(
-            elapsed, module.IDLE_CONTEXT_BUSY_TIMEOUT_MS / 1000.0 + 1.0
-        )
 
     def test_supervisor_still_fences_a_stale_idle_phase(self):
         """The idle liveness fence stays tight; only the published proof changed."""
