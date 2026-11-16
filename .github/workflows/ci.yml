@@ -149,6 +149,11 @@ jobs:
         with:
           python-version: "3.11"
 
+      # Only 3 of the 348 tests in tests.test_auto_reply_cli_runtime run here.
+      # The others fail on a fresh checkout: they need
+      # ~/Library/Application Support/openkakao/context.sqlite or a model
+      # server on 127.0.0.1:11234, or they hit "transition queue room path
+      # mismatch" (2026-11-16).
       - name: Run focused local AI tests
         run: >-
           python3 -m unittest
@@ -183,6 +188,14 @@ jobs:
           tests.test_jarvis_wake_evidence
           tests.test_jarvis_browser_runtime
           tests.test_jarvis_desktop_render_check
+          tests.test_ahp_measure_live
+          tests.test_auto_reply_golden_dataset
+          tests.test_auto_reply_transition_journal
+          tests.test_auto_reply_tui
+          tests.test_jarvis_tool_runtime
+          tests.test_jarvis_unit3
+          tests.test_jarvis_voice_runtime
+          tests.test_local_mlx_gateway
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -230,6 +243,11 @@ jobs:
         env:
           OPENKAKAO_TAURI_SOURCE_CHECK: "1"
         run: cargo check --manifest-path desktop/src-tauri/Cargo.toml --locked --offline
+
+      # Only the desktop crate is rustfmt-clean; the CLI crate is not yet
+      # (2026-11-16).
+      - name: Check desktop Rust bridge formatting
+        run: cargo fmt --manifest-path desktop/src-tauri/Cargo.toml --check
 
       # Every desktop-crate lint is either fixed or carries an in-code reason,
       # so this step keeps the bridge free of dead code and accidental

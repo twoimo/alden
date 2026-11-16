@@ -448,6 +448,23 @@ class AutoReplyDbWatchRetryTests(unittest.TestCase):
             "an unreturned hook must leave a real staleness gap",
         )
 
+    def test_poll_cursor_never_rewinds_to_the_room_start_on_a_malformed_cursor(self):
+        module = load_db_watch("auto_reply_db_watch_poll_cursor_test")
+        self.assertEqual(module._poll_cursor({"pending_log_ids": [130, 125], "acked_watermark": 123}), 124)
+        self.assertEqual(module._poll_cursor({"pending_log_ids": [], "acked_watermark": 123}), 123)
+        for malformed in (
+            {"pending_log_ids": ["not-an-id"], "acked_watermark": 123},
+            {"pending_log_ids": None, "acked_watermark": 123},
+            {"pending_log_ids": [], "acked_watermark": None},
+            {"pending_log_ids": [], "acked_watermark": "123x"},
+        ):
+            with self.subTest(state=malformed):
+                with self.assertRaises(module.DbFence) as raised:
+                    module._poll_cursor(malformed)
+                self.assertEqual(
+                    module._fixed_fence_reason(raised.exception), "reconcile_required"
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -61,7 +61,7 @@ LOCAL_CLI_TIMEOUT_SECONDS = 60
 # A group whose `last_updated_at` has not moved since the last pass cannot hold
 # a message we have not already read. Remembering that stamp lets a harvest
 # skip the per-group `local-read` instead of re-reading 2000 rows for every one
-# of ~90 groups on every pass, which cost 12-20 seconds each time (2026-09-17).
+# of ~90 groups on every pass, which cost 12-20 seconds each time.
 LOCAL_GROUP_SEEN_KEY_PREFIX = "reference_pack_group_seen:"
 
 BOT_SENDERS = frozenset(
@@ -1076,7 +1076,7 @@ def _harvest_event_stream(
         # write transaction across it kept a RESERVED lock on the shared
         # context database for that whole window, so every room's
         # context-sync-local failed with "database is locked" and the
-        # auto-reply group restarted in a loop (2026-09-18). Flush first.
+        # auto-reply group restarted in a loop. Flush first.
         connection.commit()
         _enrich_pack_analysis(
             connection,
@@ -1230,7 +1230,7 @@ def _harvest_local_groups(
         # Remember the stamp only once this group's events reached the
         # checkpoint. Recording it before the harvest would skip a group whose
         # processing ran out of budget, and its messages would never be read
-        # again until the group changed (2026-09-17).
+        # again until the group changed.
         if updated is not None and updated > 0 and not _timed_out(deadline_at):
             _remember_local_group_stamp(connection, chat_id, updated)
             seen_stamps[chat_id] = updated
@@ -1356,7 +1356,7 @@ def _rebuild_stale_v1_packs(
     # A partial batch must not leak its write transaction into the caller's
     # long read phase. This database is shared with every room's
     # context-sync-local, and an open write transaction holds a RESERVED lock
-    # on it for as long as the caller keeps working (2026-09-18).
+    # on it for as long as the caller keeps working.
     connection.commit()
     return rebuilt
 

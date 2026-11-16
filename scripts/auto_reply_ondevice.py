@@ -40,7 +40,6 @@ from local_mlx_gateway import (
 MLX_GATEWAY_CANDIDATES = (MLX_GATEWAY_BASE_URL,)
 FLASH_NEXT_MODEL_ID = "mlx/ddalcu/Qwen3.8-Flash-Next-MLX-Serve-mixed-4-8bit"
 QWEN38_27B_MODEL_ID = "mlx/ddalcu/Qwen3.8-27B-MLX-Serve-4bit"
-QWEN38_27B_MIN_MEMORY_GB = 32.0
 QWEN38_27B_DEFAULT_LOADED = False
 PROBE_TIMEOUT_SECONDS = 45.0
 PROBE_HARD_TIMEOUT_SECONDS = 90.0
@@ -300,12 +299,9 @@ class ModelResidencyManager:
         self.cancel_check = cancel_check
         self._condition = threading.Condition()
         self._in_flight = 0
-        self._cancelled = False
         self._swap_in_progress = False
 
     def _is_cancelled(self) -> bool:
-        if self._cancelled:
-            return True
         if self.cancel_check is None:
             return False
         try:
@@ -328,15 +324,6 @@ class ModelResidencyManager:
             with self._condition:
                 self._in_flight = max(0, self._in_flight - 1)
                 self._condition.notify_all()
-
-    def cancel(self) -> None:
-        with self._condition:
-            self._cancelled = True
-            self._condition.notify_all()
-
-    def reset_after_human_resume(self) -> None:
-        with self._condition:
-            self._cancelled = False
 
     def _drain(self, timeout: float) -> bool:
         deadline = time.monotonic() + max(0.0, timeout)
@@ -1074,10 +1061,6 @@ def detect_engine_paths(
     if discovered_base and advertised:
         paths["mlx-gateway"] = discovered_base
     return paths
-
-
-def detect_available_engines() -> list[str]:
-    return list(detect_engine_paths().keys())
 
 
 def detect_local_qwen_models(home: Path | None = None) -> dict[str, str]:

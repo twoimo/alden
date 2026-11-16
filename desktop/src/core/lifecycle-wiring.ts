@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { LifecycleState } from "./animation-loop";
+import type { LifecycleState } from "./lifecycle";
 
 /** Event the Rust shell emits when it shows or hides a panel window. */
 export const VISIBILITY_EVENT = "jarvis://visibility";
@@ -15,8 +15,7 @@ export type VisibilityReader = () => Promise<boolean>;
  * A hidden menubar window cannot be trusted to report itself: whether
  * `document.visibilityState` and `blur` fire at all depends on how AppKit
  * ordered the window out. The 3D loop has to stop on hide, not "usually", so
- * Rust emits the state after `show()`/`hide()` has already returned
- * (2026-09-22).
+ * Rust emits the state after `show()`/`hide()` has already returned.
  */
 export const tauriVisibilitySubscriber: VisibilitySubscriber = async (handler) => {
   const unlisten = await listen<{ visible?: unknown }>(VISIBILITY_EVENT, (event) => {
@@ -30,7 +29,7 @@ export const tauriVisibilitySubscriber: VisibilitySubscriber = async (handler) =
  *
  * The event above only reports changes, so a webview that boots while its
  * window is hidden never learns that from the stream. Until this answers, the
- * render lifecycle stays hidden (2026-09-22).
+ * render lifecycle stays hidden.
  */
 export const tauriVisibilityReader: VisibilityReader = async () => {
   const visible = await invoke<unknown>("window_is_visible");

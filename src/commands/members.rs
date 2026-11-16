@@ -389,3 +389,50 @@ pub fn cmd_loco_blocked(json: bool) -> Result<()> {
         Ok(())
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_loco_member_profile_from_getmem_doc() {
+        let doc = bson::doc! {
+            "userId": 100000002_i64,
+            "accountId": 200000001_i64,
+            "nickName": "Alice",
+            "countryIso": "kr",
+            "statusMessage": "hello",
+            "profileImageUrl": "https://example.com/p.jpg",
+            "fullProfileImageUrl": "https://example.com/p-full.jpg",
+            "originalProfileImageUrl": "https://example.com/p-original.jpg",
+            "accessPermit": "permit-token",
+            "suspicion": "",
+            "suspended": false,
+            "memorial": false,
+            "type": 0_i32,
+            "ut": 100_i64,
+        };
+
+        let profile = LocoMemberProfile::from_getmem_doc(&doc);
+        assert_eq!(
+            profile,
+            LocoMemberProfile {
+                user_id: 100000002,
+                account_id: 200000001,
+                nickname: "Alice".into(),
+                country_iso: "kr".into(),
+                status_message: "hello".into(),
+                profile_image_url: "https://example.com/p.jpg".into(),
+                full_profile_image_url: "https://example.com/p-full.jpg".into(),
+                original_profile_image_url: "https://example.com/p-original.jpg".into(),
+                access_permit: "permit-token".into(),
+                suspicion: String::new(),
+                suspended: false,
+                memorial: false,
+                member_type: 0,
+                ut: 100,
+            }
+        );
+        assert_eq!(profile.as_chat_member().display_name(), "Alice");
+    }
+}

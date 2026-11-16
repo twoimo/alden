@@ -511,7 +511,10 @@ class ReferenceStoreTests(unittest.TestCase):
         self.assertIn("누가 무엇을 어떻게 왜", source)
         changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
         self.assertIn("lecture-pack-v2", changelog)
-        rust = (ROOT / "src" / "context" / "mod.rs").read_text(encoding="utf-8")
+        rust = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in sorted((ROOT / "src" / "context").glob("*.rs"))
+        )
         self.assertIn("CREATE TABLE IF NOT EXISTS context_reference_packs(", rust)
         self.assertIn('item.result.message.starts_with(REFERENCE_PREFIX)', rust)
         menubar = MENUBAR.read_text(encoding="utf-8")

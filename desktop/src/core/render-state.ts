@@ -1,4 +1,5 @@
 import {
+  clamp01,
   writeLatticePulse,
   writeRingTargetVelocities,
   type LatticePulse,
@@ -38,7 +39,7 @@ export function ringTilt(index: number): number {
  * The state object is also the frame result: `step` returns `this`, so the
  * 15-30fps loop reads fields that the math already wrote instead of copying
  * them into a second object. Every container it reads or writes is a stable
- * field, so a frame allocates nothing (2026-09-22).
+ * field, so a frame allocates nothing.
  */
 export class CoreRenderState {
   /** Clamped seconds of the last step; 0 for a refused step. */
@@ -67,16 +68,15 @@ export class CoreRenderState {
 
   /** Clamp and store the incoming load signals. Never throws on bad input. */
   setSignals(jobLoad: number, voiceRms: number, sources?: SourceLoads): void {
-    const safe = (value: number): number => Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : 0;
-    this.targetLoad = safe(jobLoad);
-    this.targetVoiceRms = safe(voiceRms);
+    this.targetLoad = clamp01(jobLoad);
+    this.targetVoiceRms = clamp01(voiceRms);
     const target = this.targetSources;
     target.voice = this.targetVoiceRms;
     if (sources) {
-      target.reply = safe(sources.reply);
-      target.geeknews = safe(sources.geeknews);
-      target.dbSync = safe(sources.dbSync);
-      target.total = Math.max(safe(sources.total), this.targetLoad, target.voice);
+      target.reply = clamp01(sources.reply);
+      target.geeknews = clamp01(sources.geeknews);
+      target.dbSync = clamp01(sources.dbSync);
+      target.total = Math.max(clamp01(sources.total), this.targetLoad, target.voice);
       return;
     }
     target.reply = this.targetLoad;
@@ -86,12 +86,7 @@ export class CoreRenderState {
   }
 
   /** Advance the smoothing and spring state by one frame; returns `this`. */
-  step(
-    dtSeconds: number,
-    _nowMs: number,
-    base: readonly number[],
-    gain: readonly number[],
-  ): CoreRenderState {
+  step(dtSeconds: number, base: readonly number[], gain: readonly number[]): CoreRenderState {
     if (base.length !== this.ringVelocities.length) this.resizeRings(base.length);
     const dt = Number.isFinite(dtSeconds) && dtSeconds > 0
       ? Math.min(dtSeconds, MAX_FRAME_SECONDS)
@@ -140,7 +135,7 @@ export class CoreRenderState {
     }
 
     const globalLoad = Math.max(total, this.smoothLoad, this.smoothVoiceRms);
-    const pulse = writeLatticePulse(this.pulse, globalLoad, 0);
+    const pulse = writeLatticePulse(this.pulse, globalLoad);
     this.pulsePhase = (this.pulsePhase + TAU * pulse.frequency * dt) % TAU;
     this.acousticPhase = (this.acousticPhase + TAU * ACOUSTIC_WOBBLE_HZ * dt) % TAU;
     const backgroundPulse = 1 + pulse.amplitude * Math.sin(this.pulsePhase);
