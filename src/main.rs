@@ -993,6 +993,12 @@ fn is_local_only_command(command: &Commands) -> bool {
     )
 }
 
+const SERVER_LOGIN_WARNING: &str = "\
+⚠️  Server login (login --save / login --manual) is broken on recent
+   KakaoTalk macOS builds. Do NOT repeatedly retry login on an unregistered
+   device — it can get your account's sub-device login blocked. Prefer
+   'local-send'/'ax-read'/'local-chats' — no server contact needed. See README.";
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     // The record window's data source must work while the config is broken:
@@ -1054,12 +1060,7 @@ fn main() -> Result<()> {
     if std::env::var_os("OPENKAKAO_CLI_NO_DEPRECATION").is_none()
         && !is_local_only_command(&cli.command)
     {
-        eprintln!("⚠️  Server login (login --save / login --manual) is broken on recent");
-        eprintln!("   KakaoTalk macOS builds. Do NOT repeatedly retry login on an unregistered");
-        eprintln!("   device — it can get your account's sub-device login blocked. Prefer");
-        eprintln!(
-            "   'local-send'/'ax-read'/'local-chats' — no server contact needed. See README."
-        );
+        eprintln!("{SERVER_LOGIN_WARNING}");
     }
 
     match cli.command {
