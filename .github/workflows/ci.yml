@@ -152,6 +152,15 @@ jobs:
         with:
           python-version: "3.11"
 
+      # The hook launchers refuse an interpreter that group or others can
+      # write, as production does; the runner's toolcache Python is one.
+      - name: Make the test interpreter owner-writable only
+        run: |
+          PY="$(python3 -c 'import os, sys; print(os.path.realpath(sys.executable))')"
+          ls -l "$PY"
+          chmod go-w "$PY"
+          ls -l "$PY"
+
       - name: Run focused local AI tests
         run: >-
           python3 -m unittest
