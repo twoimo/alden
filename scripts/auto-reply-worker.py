@@ -843,7 +843,7 @@ def _queue_expected_chat_id() -> int | None:
 
 
 def _queue_connection() -> sqlite3.Connection:
-    """Connect to the supervisor-created exact v2 queue without migrating it."""
+    """Connect to the supervisor-created exact queue without migrating it."""
     _verify_private_queue_parent()
     expected_chat_id = _queue_expected_chat_id()
     connection = transition_journal.connect_existing_queue(
@@ -2873,31 +2873,17 @@ PRE_SEND_MODEL_RETRY_REASONS = frozenset(
 def leftover_unknown_has_ax_mutation(
     connection: sqlite3.Connection, event_id: str
 ) -> bool:
-    try:
-        row = connection.execute(
-            """
-            SELECT COUNT(*) FROM sqlite_master
-            WHERE type = 'table' AND name = 'pipeline_transitions'
-            """
-        ).fetchone()
-    except sqlite3.Error:
-        return True
-    if row is None or int(row[0] or 0) == 0:
-        return True
-    count = connection.execute(
-        """
-        SELECT COUNT(*) FROM pipeline_transitions
-        WHERE event_id = ?
-          AND (
-            (component = 'ax' AND code IN ('ax_mutation_authorized', 'local_db_confirmed'))
-            OR (component = 'pre_send' AND to_state IN ('ready', 'sending'))
-            OR from_state = 'sending'
-            OR to_state = 'sending'
-          )
-        """,
+    """Whether Return may have been pressed for this job.
+
+    Read from the job row, never the transition journal: the journal cap
+    deletes a job's rows once newer rows fill it, and their absence proves
+    nothing.
+    """
+    row = connection.execute(
+        "SELECT ax_mutation_authorized FROM reply_jobs WHERE event_id = ?",
         (event_id,),
     ).fetchone()
-    return int(count[0] or 0) > 0
+    return row is None or bool(row[0])
 
 
 def _rebind_formed_reply_to_live_owner(row: sqlite3.Row) -> str | None:
@@ -2916,13 +2902,17 @@ def _rebind_formed_reply_to_live_owner(row: sqlite3.Row) -> str | None:
     event.pop("candidate", None)
     return json.dumps(event, ensure_ascii=False, separators=(",", ":"))
 
-def _confirmed_self_reply_log_id(reply: str, after_log_id: int | None) -> int | None:
-    text = str(reply or "").strip()
-    if not text:
-        return None
+CONFIRMATION_READ_ROWS = 8
+
+
+def _recent_room_rows() -> list | None:
+    """The room's newest CONFIRMATION_READ_ROWS rows, oldest first, or None."""
     try:
         returncode, stdout_bytes, _ = _run_bounded_process(
-            [str(BIN), "local-read", str(_queue_expected_chat_id()), "--count", "8", "--json"],
+            [
+                str(BIN), "local-read", str(_queue_expected_chat_id()),
+                "--count", str(CONFIRMATION_READ_ROWS), "--json",
+            ],
             cwd=ROOT,
             env=os.environ.copy(),
             timeout=8.0,
@@ -2937,22 +2927,75 @@ def _confirmed_self_reply_log_id(reply: str, after_log_id: int | None) -> int | 
         rows = json.loads(stdout_bytes.decode("utf-8"))
     except (UnicodeError, json.JSONDecodeError):
         return None
-    if not isinstance(rows, list):
+    return rows if isinstance(rows, list) else None
+
+
+def _own_row_log_id(row: object, text: str) -> int | None:
+    """The log id of `row` when it is this room's own row reading exactly `text`."""
+    if not isinstance(row, dict) or not _is_self_chat_row(row):
+        return None
+    if "chat_id" in row and _fence_int(row["chat_id"]) != _queue_expected_chat_id():
+        return None
+    if str(row.get("message") or "").strip() != text:
+        return None
+    log_id = row.get("log_id")
+    if not isinstance(log_id, int) or isinstance(log_id, bool) or log_id <= 0:
+        return None
+    return log_id
+
+
+def _confirmed_self_reply_log_id(reply: str, after_log_id: int | None) -> int | None:
+    """The newest own row reading exactly `reply` after `after_log_id`."""
+    text = str(reply or "").strip()
+    if not text:
+        return None
+    rows = _recent_room_rows()
+    if rows is None:
         return None
     for row in reversed(rows):
-        if not isinstance(row, dict) or not _is_self_chat_row(row):
-            continue
-        if "chat_id" in row and _fence_int(row["chat_id"]) != _queue_expected_chat_id():
-            continue
-        if str(row.get("message") or "").strip() != text:
-            continue
-        log_id = row.get("log_id")
-        if not isinstance(log_id, int) or isinstance(log_id, bool) or log_id <= 0:
-            continue
-        if after_log_id is not None and log_id <= after_log_id:
-            continue
-        return log_id
+        log_id = _own_row_log_id(row, text)
+        if log_id is not None and (after_log_id is None or log_id > after_log_id):
+            return log_id
     return None
+
+
+def _send_confirmation_log_id(reply: str, pre_send_tail_log_id: object) -> int | None:
+    """The row one send added, judged the way local-send confirms it.
+
+    Only a row newer than the room's tail before the send counts, so a matching
+    row the account wrote earlier is never this send's proof. Two matching rows
+    are a duplicate, not a confirmation. A page that does not reach back to the
+    tail could hide one, so it confirms nothing either.
+    """
+    text = str(reply or "").strip()
+    if (
+        not text
+        or isinstance(pre_send_tail_log_id, bool)
+        or not isinstance(pre_send_tail_log_id, int)
+        or pre_send_tail_log_id <= 0
+    ):
+        return None
+    rows = _recent_room_rows()
+    if rows is None:
+        return None
+    reaches_tail = len(rows) < CONFIRMATION_READ_ROWS or any(
+        isinstance(row, dict)
+        and isinstance(row.get("log_id"), int)
+        and not isinstance(row.get("log_id"), bool)
+        and row["log_id"] <= pre_send_tail_log_id
+        for row in rows
+    )
+    if not reaches_tail:
+        return None
+    matches = [
+        log_id
+        for row in rows
+        if isinstance(row, dict)
+        and row.get("message_type", 1) == 1
+        and (log_id := _own_row_log_id(row, text)) is not None
+        and log_id > pre_send_tail_log_id
+    ]
+    return matches[0] if len(matches) == 1 else None
 def later_self_already_replied(
     after_log_id: int | None, reply: str | None = None
 ) -> bool:
@@ -3125,11 +3168,11 @@ def leftover_pre_send_unknown_skip_fields(
                     "error_class": None,
                 }
         if ax_mutated:
-            # `ax_mutation_authorized` is only journalled when the job moves to
-            # `sending`, so the send may already have happened and the exact
-            # match just scrolled past the bounded local-read window. A missing
-            # match is not proof of non-delivery: keep delivery_unknown instead
-            # of rescheduling and risking a duplicate send (2026-09-13).
+            # The job was committed to `sending`, so the send may already have
+            # happened and the exact match just scrolled past the bounded
+            # local-read window. A missing match is not proof of non-delivery:
+            # keep delivery_unknown instead of rescheduling and risking a
+            # duplicate send (2026-09-13).
             return None
         if _row_event_is_proactive(row) and not _proactive_unix_leftover_job(row):
             delay = row["scheduled_delay_seconds"] or MIN_REPLY_DELAY_SECONDS
@@ -3367,16 +3410,7 @@ def _queue_reconciliation_blockers(connection: sqlite3.Connection) -> int:
                 reply IS NOT NULL
                 AND length(reply) > 0
                 AND COALESCE(json_extract(event_json, '$.proactive'), 0) != 1
-                AND NOT EXISTS (
-                  SELECT 1 FROM pipeline_transitions t
-                  WHERE t.event_id = reply_jobs.event_id
-                    AND (
-                      (t.component = 'ax' AND t.code IN ('ax_mutation_authorized', 'local_db_confirmed'))
-                      OR (t.component = 'pre_send' AND t.to_state IN ('ready', 'sending'))
-                      OR t.from_state = 'sending'
-                      OR t.to_state = 'sending'
-                    )
-                )
+                AND ax_mutation_authorized = 0
               )
               OR EXISTS (
                 SELECT 1 FROM pipeline_transitions t
@@ -8814,7 +8848,7 @@ def _open_pinned_link(
     host_header = hostname
     if port not in {80, 443}:
         host_header = f"{hostname}:{port}"
-    last_error: BaseException | None = None
+    last_error: Exception | None = None
     for address in addresses:
         try:
             ip = str(address[4][0])
@@ -8842,11 +8876,13 @@ def _open_pinned_link(
             )
             return connection, connection.getresponse()
         except BaseException as exc:
-            last_error = exc
             try:
                 connection.close()
             except (NameError, OSError):
                 pass
+            if not isinstance(exc, Exception):
+                raise
+            last_error = exc
     if last_error is not None:
         raise last_error
     raise OSError("link connection unavailable")
@@ -9692,20 +9728,21 @@ def _owner_laughter_run_lengths(profile: dict | None) -> list[int]:
 
 
 def _resample_laughter_runs(text: str, profile: dict | None = None) -> str:
-    """Replace each ㅋ{3,} run with a length sampled from the owner distribution.
+    """Replace each exact ㅋㅋㅋ run with a length sampled from the owner distribution.
 
-    Prevents the model tendency to always emit exactly 3 ㅋ.
-    Runs shorter than 3 are left as-is (stripped by the policy).
+    Prevents the model tendency to always emit exactly 3 ㅋ. A longer run is
+    already varied and stays as written. The draft seeds the draw, so the same
+    draft always sanitizes to the same reply.
     """
-    import random
     pool = _owner_laughter_run_lengths(profile)
     if not pool:
         return text
+    draw = random.Random(text)
 
     def _replace(match):
-        return "ㅋ" * random.choice(pool)
+        return "ㅋ" * draw.choice(pool)
 
-    return re.sub(r"ㅋ{3,}", _replace, text)
+    return re.sub(r"(?<!ㅋ)ㅋ{3}(?!ㅋ)", _replace, text)
 
 
 
@@ -10369,9 +10406,9 @@ def _pre_mutation_send_hold(
 ) -> str | None:
     """Last hold check that can still prevent the composing mutation.
 
-    The read-only preflight and the composer allowlist write can take seconds,
-    so a draft that was valid when the job was claimed can age out, or the room
-    can move on, before the mutation runs. Committing ``sending`` has no way
+    The read-only preflight can take seconds, so a draft that was valid when
+    the job was claimed can age out, or the room can move on, before the
+    mutation runs. Committing ``sending`` has no way
     back, which is why this runs immediately before it (AHP:
     intervention_timing).
     """
@@ -12130,7 +12167,7 @@ def generate_reply(
     env.update(
         {
             "HOME": str(Path.home()),
-            "PATH": "/Users/twoimo/.bun/bin:/usr/bin:/bin:/opt/homebrew/bin",
+            "PATH": f"{Path.home() / '.bun' / 'bin'}:/usr/bin:/bin:/opt/homebrew/bin",
             "TMPDIR": "/tmp",
         }
     )
@@ -13657,7 +13694,6 @@ def send_reply(
     if inbound_quote:
         command.extend(["--reply-to", inbound_quote])
     composer_allowlist_path = Path(str(QUEUE)).parent / "composer-allowlist.json"
-    _allow_composer_draft(composer_allowlist_path, reply)
     worker_environment = _local_send_environment(
         event, expected_target_chat_id, composer_allowlist_path
     )
@@ -13725,6 +13761,9 @@ def send_reply(
         )
         if transition != "updated":
             return False
+    # Only now may this reply end up in the composer, so only now may the CLI
+    # treat a composer holding it as the worker's own leftover.
+    _allow_composer_draft(composer_allowlist_path, reply)
     try:
         returncode, stdout_bytes, _ = _run_bounded_process(
             command,
@@ -13747,11 +13786,6 @@ def send_reply(
         and result.get("confirmed") is False
         and event_id
     ):
-        inbound = None
-        if isinstance(event, dict):
-            inbound = event.get("log_id")
-            if not isinstance(inbound, int) or isinstance(inbound, bool):
-                inbound = None
         reply_text = ""
         if connection is not None:
             queued = connection.execute(
@@ -13760,7 +13794,9 @@ def send_reply(
             ).fetchone()
             if queued is not None:
                 reply_text = str(queued["reply"] or "")
-        confirmed = _confirmed_self_reply_log_id(reply_text, inbound)
+        confirmed = _send_confirmation_log_id(
+            reply_text, result.get("pre_send_tail_log_id")
+        )
         if confirmed is not None:
             result["status"] = "confirmed_local_db"
             result["confirmed"] = True
@@ -15796,6 +15832,7 @@ def _worker_sleep_seconds(now: float, next_recovery_at: float) -> float:
 
 GEEKNEWS_FEED_URL = "https://news.hada.io/rss/news"
 GEEKNEWS_TOPIC_RE = re.compile(r"^https://news\.hada\.io/topic\?id=([1-9][0-9]{0,9})\Z")
+GEEKNEWS_TOPIC_LINK_RE = re.compile(r"https://news\.hada\.io/topic\?id=([1-9][0-9]{0,9})(?![0-9])")
 GEEKNEWS_CURSOR_NAME = "geeknews-rss-cursor.json"
 GEEKNEWS_MAX_ITEMS = 5
 GEEKNEWS_MAX_SUMMARY_CHARS = 90
@@ -15803,6 +15840,7 @@ GEEKNEWS_FEED_MAX_BYTES = 400_000
 GEEKNEWS_FEED_TIMEOUT_SECONDS = 8.0
 GEEKNEWS_CONFIRMATION_READ_COUNT = 100
 GEEKNEWS_CONFIRMATION_TIMEOUT_SECONDS = 8.0
+GEEKNEWS_SEND_TIMEOUT_SECONDS = 60.0
 GEEKNEWS_SLOT_TZ = ZoneInfo("Asia/Seoul")
 GEEKNEWS_DAILY_SLOTS = (
     ("morning", 8, 40, 20),
@@ -15810,6 +15848,7 @@ GEEKNEWS_DAILY_SLOTS = (
     ("evening", 19, 50, 25),
 )
 GEEKNEWS_ROOM_QUIET_SECONDS = 10 * 60
+GEEKNEWS_CURSOR_LOCK_NAME = ".geeknews-cursor.lock"
 
 
 def _geeknews_cursor_path() -> Path:
@@ -15862,15 +15901,18 @@ def _geeknews_slot_at(now: float) -> tuple[str, str] | None:
     return None
 
 
+def _geeknews_slot_marker(stamp: float) -> str | None:
+    slot = _geeknews_slot_at(stamp)
+    return None if slot is None else f"{slot[0]}:{slot[1]}"
+
+
 def _geeknews_slot_open(now: float) -> bool:
-    slot = _geeknews_slot_at(now)
-    if slot is None:
+    marker = _geeknews_slot_marker(now)
+    if marker is None:
         return False
-    day, name = slot
     posted = _load_geeknews_cursor().get("posted_slots")
     if not isinstance(posted, list):
         return True
-    marker = f"{day}:{name}"
     return marker not in {str(item) for item in posted[-32:]}
 
 
@@ -15923,22 +15965,29 @@ def _geeknews_slot_has_attempt(
 
 
 def _mark_geeknews_digest_confirmed(event: dict, *, now: float | None = None) -> None:
-    ids: set[int] = set()
-    for item in event.get("proactive_ids") or []:
-        if isinstance(item, int) and not isinstance(item, bool) and item > 0:
-            ids.add(item)
-    cursor = _load_geeknews_cursor()
-    values = cursor.get("seen_ids")
-    if isinstance(values, list):
-        for item in values[-200:]:
-            if isinstance(item, int) and not isinstance(item, bool) and item > 0:
-                ids.add(item)
-    newest = cursor.get("newest_id")
-    if not isinstance(newest, int) or isinstance(newest, bool) or newest <= 0:
-        newest = max(ids) if ids else 0
-    else:
-        newest = max(newest, max(ids) if ids else 0)
-    _store_geeknews_seen_ids(ids, newest, now=now, mark_posted_slot=True)
+    ids = {
+        item
+        for item in event.get("proactive_ids") or []
+        if isinstance(item, int) and not isinstance(item, bool) and item > 0
+    }
+    sent_at = event.get("sent_at")
+    posted_slot = (
+        _geeknews_slot_marker(float(sent_at))
+        if isinstance(sent_at, int) and not isinstance(sent_at, bool) and sent_at > 0
+        else None
+    )
+    try:
+        _store_geeknews_seen_ids(ids, max(ids, default=0), now=now, posted_slot=posted_slot)
+    except OSError as error:
+        # The room already shows this post. Raising here would leave the job
+        # in `sending`; its `sent` queue row keeps these ids out of the next
+        # selection instead.
+        print(
+            f"[geeknews] confirmed post not recorded in the room cursor: "
+            f"{type(error).__name__}: {error} ids={sorted(ids)}",
+            file=sys.stderr,
+            flush=True,
+        )
 
 
 def _store_geeknews_seen_ids(
@@ -15946,41 +15995,84 @@ def _store_geeknews_seen_ids(
     newest_id: int,
     *,
     now: float | None = None,
-    mark_posted_slot: bool = False,
+    posted_slot: str | None = None,
 ) -> None:
+    """Merge one confirmed post into the room cursor.
+
+    The room worker and the host GeekNews slot CLI both record posts here, so
+    the read-merge-write holds the room's cursor lock.
+    """
     path = _geeknews_cursor_path()
-    previous = _load_geeknews_cursor()
-    posted = previous.get("posted_slots")
-    if not isinstance(posted, list):
-        posted = []
     stamp = time.time() if now is None else float(now)
-    if mark_posted_slot:
-        slot = _geeknews_slot_at(stamp)
-        if slot is not None:
-            marker = f"{slot[0]}:{slot[1]}"
-            if marker not in {str(item) for item in posted}:
-                posted = [*(str(item) for item in posted[-31:]), marker]
-    payload = {
-        "feed": GEEKNEWS_FEED_URL,
-        "newest_id": newest_id,
-        "seen_ids": sorted(seen_ids)[-200:],
-        "posted_slots": posted[-32:],
-        "updated_at": int(stamp),
-    }
-    raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-    fd, temporary = tempfile.mkstemp(prefix="geeknews-cursor.", dir=path.parent)
-    try:
-        os.fchmod(fd, QUEUE_FILE_MODE)
-        with os.fdopen(fd, "wb") as stream:
-            stream.write(raw)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, path)
-    except OSError:
+    with _private_lock(
+        path.with_name(GEEKNEWS_CURSOR_LOCK_NAME), expected_parent=path.parent
+    ):
+        previous = _load_geeknews_cursor()
+        seen = _load_geeknews_seen_ids() | set(seen_ids)
+        newest = previous.get("newest_id")
+        if not isinstance(newest, int) or isinstance(newest, bool) or newest <= 0:
+            newest = 0
+        posted = previous.get("posted_slots")
+        if not isinstance(posted, list):
+            posted = []
+        if posted_slot and posted_slot not in {str(item) for item in posted}:
+            posted = [*(str(item) for item in posted[-31:]), posted_slot]
+        payload = {
+            "feed": GEEKNEWS_FEED_URL,
+            "newest_id": max(newest, newest_id),
+            "seen_ids": sorted(seen)[-200:],
+            "posted_slots": posted[-32:],
+            "updated_at": int(stamp),
+        }
+        raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        fd, temporary = tempfile.mkstemp(prefix="geeknews-cursor.", dir=path.parent)
         try:
-            os.unlink(temporary)
-        except OSError:
-            pass
+            os.fchmod(fd, QUEUE_FILE_MODE)
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(raw)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, path)
+        except BaseException:
+            try:
+                os.unlink(temporary)
+            except OSError:
+                pass
+            raise
+
+
+def _geeknews_queue_posted_ids(connection: sqlite3.Connection) -> set[int]:
+    """Topic ids of GeekNews jobs this room's queue records as sent."""
+    rows = connection.execute(
+        """
+        SELECT json_extract(event_json, '$.proactive_ids') FROM reply_jobs
+        WHERE status = 'sent'
+          AND json_extract(event_json, '$.proactive_query') = 'geeknews-rss'
+        """
+    ).fetchall()
+    posted: set[int] = set()
+    for (raw,) in rows:
+        try:
+            values = json.loads(raw) if raw else []
+        except (TypeError, ValueError):
+            continue
+        if isinstance(values, list):
+            posted.update(
+                item
+                for item in values
+                if isinstance(item, int) and not isinstance(item, bool) and item > 0
+            )
+    return posted
+
+
+def _geeknews_room_posted_ids(rows: list[dict]) -> set[int]:
+    """Topic ids our own messages in a room readback already linked."""
+    return {
+        int(match.group(1))
+        for row in rows
+        if row.get("is_self") is True
+        for match in GEEKNEWS_TOPIC_LINK_RE.finditer(str(row.get("message") or ""))
+    }
 
 
 def _html_to_plain(value: str) -> str:
@@ -16081,21 +16173,25 @@ def _format_geeknews_top3_line(
 
 
 def _next_geeknews_digest(
-    *, fetcher=None, now: float | None = None, persist_seen: bool = True
+    *,
+    fetcher=None,
+    now: float | None = None,
+    already_posted: frozenset[int] | set[int] = frozenset(),
 ) -> dict | None:
+    """Pick the next TOP5 the cursor and `already_posted` have not seen.
+
+    `already_posted` carries a second durable record of past posts, so a post
+    whose cursor write failed is not picked again.
+    """
     xml = _fetch_geeknews_feed_xml(fetcher)
     items = _parse_geeknews_entries(xml)
     if not items:
         return None
-    seen = _load_geeknews_seen_ids()
+    seen = _load_geeknews_seen_ids() | set(already_posted)
     fresh = [item for item in items if item["id"] not in seen]
     if not fresh:
         return None
     chosen = fresh[:GEEKNEWS_MAX_ITEMS]
-    newest = max(item["id"] for item in items)
-    if persist_seen:
-        seen.update(item["id"] for item in chosen)
-        _store_geeknews_seen_ids(seen, newest, now=now)
     message = _format_geeknews_top3_line(chosen, now=now)
     if not message:
         return None
@@ -16426,7 +16522,9 @@ def maybe_enqueue_proactive_topic(
                     "ids": [],
                 }
     if digest is None:
-        digest = _next_geeknews_digest(now=now, persist_seen=False)
+        digest = _next_geeknews_digest(
+            now=now, already_posted=_geeknews_queue_posted_ids(connection)
+        )
     if not isinstance(digest, dict):
         return None
     title = str(digest.get("title") or "").strip()
@@ -16872,12 +16970,28 @@ def _idle_cycle(
     _publish_idle_progress(active_health)
 
 
+_WORKER_SHUTDOWN_STARTED = False
+
+
+def _raise_worker_shutdown(signum: int, _frame: object) -> None:
+    # The Rust sweep signals the whole group and the Python supervisor then
+    # terminates the worker again. A second SystemExit would abort the cleanup
+    # the first one started, so later signals wait for it to finish.
+    global _WORKER_SHUTDOWN_STARTED
+    if _WORKER_SHUTDOWN_STARTED:
+        return
+    _WORKER_SHUTDOWN_STARTED = True
+    raise SystemExit(128 + signum)
+
+
 def worker_main() -> int:
-    global _WORKER_HEALTH
+    global _WORKER_HEALTH, _WORKER_SHUTDOWN_STARTED
     connection: sqlite3.Connection | None = None
     circuit_connection: sqlite3.Connection | None = None
     health: _WorkerHealth | None = None
     idle_sampler: _IdleContextSampler | None = None
+    _WORKER_SHUTDOWN_STARTED = False
+    previous_sigterm = signal.signal(signal.SIGTERM, _raise_worker_shutdown)
     try:
         try:
             connection = _queue_connection()
@@ -17078,6 +17192,7 @@ def worker_main() -> int:
         if health is not None:
             health.close()
         _WORKER_HEALTH = None
+        signal.signal(signal.SIGTERM, previous_sigterm)
 
 def main() -> int:
     try:
@@ -17155,8 +17270,13 @@ def main() -> int:
     return ack_return("accepted", fingerprint)
 
 
-def _geeknews_confirmation_chat_id(chat: str, queue_path: Path) -> int | None:
-    """Resolve a numeric readback target from the explicit chat or queue path."""
+def _geeknews_operator_room(chat: str, queue_path: Path) -> tuple[int, str] | None:
+    """Return (chat_id, window title) when --chat names the --queue room.
+
+    local-send targets a window title and the readback a numeric room, so
+    both come from the room catalog entry the session attested as
+    `bind:<id>:<title>`. An unnamed group room has no local-DB name to check.
+    """
 
     def parse(value: object) -> int | None:
         raw = str(value or "").strip()
@@ -17170,12 +17290,26 @@ def _geeknews_confirmation_chat_id(chat: str, queue_path: Path) -> int | None:
             return None
         return parsed if parsed < MAX_INT64 else None
 
-    requested = parse(chat)
+    def title_of(room: dict) -> str:
+        return " ".join(str(room.get("title") or "").split())
+
     queue = Path(queue_path)
-    queued = parse(queue.parent.name) if queue.parent.parent.name == "rooms" else None
-    if requested is not None and queued is not None and requested != queued:
+    if queue.parent.parent.name != "rooms":
         return None
-    return requested or queued
+    chat_id = parse(queue.parent.name)
+    catalog = _read_fence_object(queue.parent.parent.parent / "menubar-room-catalog.json")
+    rooms = catalog[0].get("rooms") if catalog is not None else None
+    if chat_id is None or not isinstance(rooms, list):
+        return None
+    rooms = [room for room in rooms if isinstance(room, dict)]
+    bound = [room for room in rooms if parse(room.get("chat_id")) == chat_id]
+    title = title_of(bound[0]) if len(bound) == 1 else ""
+    if not title or sum(title_of(room) == title for room in rooms) != 1:
+        return None
+    requested = " ".join(str(chat or "").split())
+    if requested != title and parse(requested) != chat_id:
+        return None
+    return chat_id, title
 
 
 def _geeknews_confirmation_rows(bin_path: str, chat_id: int) -> list[dict] | None:
@@ -17234,17 +17368,23 @@ def geeknews_operator_cli(arguments: list[str]) -> int:
     parser.add_argument("--mark-slot", default="")
     parser.add_argument("--bin", default=str(BIN))
     parser.add_argument("--chat", default=CHAT)
-    parser.add_argument(
-        "--queue",
-        default=str(
-            Path.home()
-            / "Library/Application Support/openkakao/auto-reply/rooms/417780809780519/reply-queue.sqlite3"
-        ),
-    )
+    parser.add_argument("--queue", required=True)
     args = parser.parse_args(arguments)
     global QUEUE
     QUEUE = Path(args.queue)
-    digest = _next_geeknews_digest(persist_seen=False)
+    already_posted: set[int] = set()
+    if args.send:
+        room = _geeknews_operator_room(args.chat, QUEUE)
+        if room is None:
+            print("--chat is not the catalog room of --queue; not sent", file=sys.stderr)
+            return 4
+        confirmation_chat_id, title = room
+        baseline_rows = _geeknews_confirmation_rows(args.bin, confirmation_chat_id)
+        if baseline_rows is None:
+            print("unable to establish room readback baseline; not sent", file=sys.stderr)
+            return 4
+        already_posted = _geeknews_room_posted_ids(baseline_rows)
+    digest = _next_geeknews_digest(already_posted=already_posted)
     if digest is None:
         print("no unseen GeekNews items", file=sys.stderr)
         return 2
@@ -17254,22 +17394,19 @@ def geeknews_operator_cli(arguments: list[str]) -> int:
         print(message)
         print(f"# ids={ids}", file=sys.stderr)
         return 0
-    confirmation_chat_id = _geeknews_confirmation_chat_id(args.chat, QUEUE)
-    if confirmation_chat_id is None:
-        print("unable to identify exact room; not sent", file=sys.stderr)
-        return 4
-    baseline_rows = _geeknews_confirmation_rows(args.bin, confirmation_chat_id)
-    if baseline_rows is None:
-        print("unable to establish room readback baseline; not sent", file=sys.stderr)
-        return 4
     baseline_log_id = max((row["log_id"] for row in baseline_rows), default=0)
     send_started_at = int(time.time())
-    completed = subprocess.run(
-        [str(Path(args.bin)), "local-send", str(args.chat), message, "-y", "--json"],
-        check=False,
-    )
-    if completed.returncode != 0:
-        return completed.returncode or 1
+    try:
+        completed = subprocess.run(
+            [str(Path(args.bin)), "local-send", title, message, "-y", "--json"],
+            check=False,
+            timeout=GEEKNEWS_SEND_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        print("local-send timed out; checking the room", file=sys.stderr)
+    else:
+        if completed.returncode != 0:
+            return completed.returncode or 1
     confirmation_log_id = None
     rows = _geeknews_confirmation_rows(args.bin, confirmation_chat_id)
     if rows is not None:
@@ -17289,36 +17426,18 @@ def geeknews_operator_cli(arguments: list[str]) -> int:
     if confirmation_log_id is None:
         print("sent but not locally confirmed; cursor unchanged", file=sys.stderr)
         return 3
-    seen = _load_geeknews_seen_ids()
-    seen.update(ids)
-    newest = max(seen) if seen else 0
-    _store_geeknews_seen_ids(seen, newest, mark_posted_slot=False)
-    if args.mark_slot:
-        cursor = _load_geeknews_cursor()
-        posted = cursor.get("posted_slots")
-        if not isinstance(posted, list):
-            posted = []
-        if args.mark_slot not in {str(item) for item in posted}:
-            cursor["posted_slots"] = [*(str(item) for item in posted[-31:]), args.mark_slot][-32:]
-            cursor["seen_ids"] = sorted(seen)[-200:]
-            cursor["newest_id"] = newest
-            cursor["updated_at"] = int(time.time())
-            path = _geeknews_cursor_path()
-            raw = json.dumps(cursor, ensure_ascii=False, separators=(",", ":")).encode()
-            fd, temporary = tempfile.mkstemp(prefix="geeknews-cursor.", dir=path.parent)
-            try:
-                os.fchmod(fd, QUEUE_FILE_MODE)
-                with os.fdopen(fd, "wb") as stream:
-                    stream.write(raw)
-                    stream.flush()
-                    os.fsync(stream.fileno())
-                os.replace(temporary, path)
-            except OSError:
-                try:
-                    os.unlink(temporary)
-                except OSError:
-                    pass
-                raise
+    try:
+        _store_geeknews_seen_ids(
+            set(ids), max(ids, default=0), posted_slot=args.mark_slot or None
+        )
+    except OSError as error:
+        print(
+            f"# confirmed log_id={confirmation_log_id} ids={ids} but the room cursor "
+            f"was not written ({type(error).__name__}: {error}); the next send skips "
+            "these ids only while they stay in the room readback",
+            file=sys.stderr,
+        )
+        return 5
     print(f"# confirmed log_id={confirmation_log_id} ids={ids}", file=sys.stderr)
     return 0
 

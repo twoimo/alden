@@ -101,6 +101,7 @@ class FakeCli:
         self.preflight: object = "ready"
         self.send: object = "confirmed"
         self.before_send = None
+        self.pre_send_tail = 0
         self.after_record = None
         self.runner = None
         connection = sqlite3.connect(context_db)
@@ -140,6 +141,12 @@ class FakeCli:
                 return self._answer(_next(self.preflight), argv)
             if self.before_send is not None:
                 self.before_send(argv)
+            # The newest row local-send sees before it touches the composer,
+            # as pre_send_tail_log_id computes it in src/commands/local_send.rs.
+            source = options["env"].get("OPENKAKAO_EXPECTED_SOURCE_LOG_ID") or "0"
+            self.pre_send_tail = max(
+                [int(source)] + [row["log_id"] for row in self.transcript]
+            )
             return self._answer(self.send, argv)
         raise AssertionError(f"unexpected CLI command: {argv[:2]}")
 
@@ -292,6 +299,7 @@ class FakeCli:
             "status": "accepted_unconfirmed",
             "confirmed": False,
             "network": False,
+            "pre_send_tail_log_id": self.pre_send_tail,
         }
         if scripted == "ready":
             payload = {
@@ -317,6 +325,11 @@ class FakeCli:
             payload = unconfirmed
         elif scripted == "posted_but_unconfirmed":
             # The room shows the reply, but the CLI gave up waiting for it.
+            self.post(argv[3], is_self=True, author_id=1)
+            payload = unconfirmed
+        elif scripted == "posted_twice_but_unconfirmed":
+            # KakaoTalk delivered the reply twice; the CLI rejects a duplicate.
+            self.post(argv[3], is_self=True, author_id=1)
             self.post(argv[3], is_self=True, author_id=1)
             payload = unconfirmed
         elif isinstance(scripted, dict):
@@ -552,6 +565,24 @@ class SendPathCase(unittest.TestCase):
         finally:
             writer.close()
 
+    def journal_other_messages(self, count: int) -> None:
+        """Journal `count` other room messages the way db-watch does."""
+        writer = sqlite3.connect(self.module.QUEUE)
+        try:
+            writer.executemany(
+                "INSERT INTO pipeline_transitions(schema_version, event_id, "
+                "attempt_no, component, from_state, to_state, code, source_epoch, "
+                "occurred_at_ns) VALUES (1, ?, 0, 'ingress', 'detected', 'hooking', "
+                "'candidate_persisted', ?, ?)",
+                [
+                    (f"db:{CHAT_ID}:{100_000 + n}", EPOCH, time.time_ns())
+                    for n in range(count)
+                ],
+            )
+            writer.commit()
+        finally:
+            writer.close()
+
     def supersede(self, event_id: str, successor_log_id: int) -> None:
         """Record that a newer message of the same burst replaced this job."""
         self.change_queue_row(
@@ -748,6 +779,32 @@ class DueDraftDeliveryTests(SendPathCase):
         self.assertIsNone(self.module.claim_job(time.time() + 86400.0, self.connection))
         self.assertEqual(len(self.cli.sends()), 1)
 
+    def test_unconfirmed_send_is_never_retried_after_the_journal_rolls_over(self):
+        event = self.inbound(509)
+        job = self.due_draft(event, REPLY)
+        self.cli.send = "accepted_unconfirmed"
+        self.process(job)
+        self.assertEqual(self.status(event["event_id"]), "delivery_unknown")
+
+        self.journal_other_messages(self.module.transition_journal.JOURNAL_MAX_ROWS)
+        self.assertEqual(self.transitions(event["event_id"]), [])
+
+        # What worker_main does while it is fenced: recover, give up, claim.
+        self.cli.send = "confirmed"
+        for _ in range(3):
+            self.module.recover_stale_jobs(self.connection)
+            self.module._auto_reconcile_give_up(self.connection, time.time())
+            claimed = self.module.claim_job(time.time() + 86400.0, self.connection)
+            if claimed is not None:
+                self.process(*claimed)
+
+        self.assertEqual(len(self.cli.sends()), 1)
+        self.assertEqual(
+            self.outcome(event["event_id"]),
+            ("delivery_unknown", *DRAFT, REPLY, 3.0, "delivery_unknown"),
+        )
+        self.assertGreater(self.module._queue_reconciliation_blockers(self.connection), 0)
+
     def test_send_the_cli_could_not_confirm_is_adopted_from_the_room_transcript(self):
         event = self.inbound(504)
         job = self.due_draft(event, REPLY)
@@ -774,6 +831,42 @@ class DueDraftDeliveryTests(SendPathCase):
             ("ax", "sending", "sending", "local_db_confirmed"),
             self.transitions(event["event_id"]),
         )
+
+    def test_matching_row_the_account_wrote_before_the_send_is_not_its_proof(self):
+        event = self.inbound(510)
+        job = self.due_draft(event, REPLY)
+        # The account types the same words on another device just before Return.
+        self.cli.before_send = lambda _argv: self.cli.post(REPLY, is_self=True, author_id=1)
+        self.cli.send = "accepted_unconfirmed"
+
+        self.process(job)
+
+        self.assertEqual(
+            self.outcome(event["event_id"]),
+            ("delivery_unknown", *DRAFT, REPLY, 3.0, "delivery_unknown"),
+        )
+        self.assertNotIn(
+            ("ax", "sending", "sending", "local_db_confirmed"),
+            self.transitions(event["event_id"]),
+        )
+        self.assert_left_for_reconciliation(event["event_id"], REPLY)
+
+    def test_reply_that_landed_twice_is_not_confirmed(self):
+        event = self.inbound(511)
+        job = self.due_draft(event, REPLY)
+        self.cli.send = "posted_twice_but_unconfirmed"
+
+        self.process(job)
+
+        self.assertEqual(
+            self.outcome(event["event_id"]),
+            ("delivery_unknown", *DRAFT, REPLY, 3.0, "delivery_unknown"),
+        )
+        self.assertNotIn(
+            ("ax", "sending", "sending", "local_db_confirmed"),
+            self.transitions(event["event_id"]),
+        )
+        self.assert_left_for_reconciliation(event["event_id"], REPLY)
 
     def test_send_refused_before_composing_is_retried_inside_the_window(self):
         event = self.inbound(505)
@@ -1508,6 +1601,36 @@ class SendBoundaryTests(SendPathCase):
             json.loads(allowlist.read_text(encoding="utf-8")),
             {"allowed": [f"답 {index}" for index in range(9, 1, -1)]},
         )
+
+    def test_only_a_reply_about_to_be_typed_enters_the_composer_allowlist(self):
+        allowlist = self.room / "composer-allowlist.json"
+        unavailable = (1, b"", b"KakaoTalk window is not open")
+
+        blocked = self.inbound(770)
+        self.due_draft(blocked, "막힌 답")
+        self.cli.preflight = unavailable
+        with mock.patch.object(self.module, "PRE_SEND_PREFLIGHT_RETRY_SECONDS", 0.0):
+            self.assertEqual(self.send_reply("막힌 답", blocked)[:2], (False, []))
+
+        held = self.inbound(771)
+        scheduled = json.loads(self.due_draft(held, "보류된 답")["event_json"])
+        self.cli.preflight = "ready"
+        self.observe_room_tail(772)
+        self.assertEqual(
+            self.send_reply("보류된 답", scheduled)[:2],
+            (False, ["conversation_context_changed"]),
+        )
+        self.assertEqual(self.cli.sends(), [])
+        self.assertFalse(allowlist.exists())
+
+        sent = self.inbound(773)
+        self.due_draft(sent, REPLY)
+        at_send = []
+        self.cli.before_send = lambda _argv: at_send.append(
+            json.loads(allowlist.read_text(encoding="utf-8"))
+        )
+        self.assertTrue(self.send_reply(REPLY, sent)[0])
+        self.assertEqual(at_send, [{"allowed": [REPLY]}])
 
     def test_preflight_is_retried_a_bounded_number_of_times(self):
         event = self.inbound(760)

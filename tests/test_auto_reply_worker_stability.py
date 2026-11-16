@@ -1,0 +1,564 @@
+import importlib.util
+import io
+import json
+import os
+import re
+import signal
+import sqlite3
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+import unittest
+import urllib.parse
+from datetime import datetime
+from pathlib import Path
+from unittest import mock
+
+
+ROOT = Path(__file__).resolve().parents[1]
+SCRIPTS = ROOT / "scripts"
+if str(SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS))
+WORKER = SCRIPTS / "auto-reply-worker.py"
+
+
+def load_worker(name: str):
+    spec = importlib.util.spec_from_file_location(name, WORKER)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+def _process_gone(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    return False
+
+
+def _wait_until(predicate, timeout: float) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.02)
+    return predicate()
+
+
+# worker_main with every collaborator faked except one real isolated model
+# runner. The runner and its descendant ignore SIGTERM, so only the worker's
+# own group cleanup (TERM, then KILL) can stop them.
+SIGTERM_HARNESS = r"""
+import importlib.util, os, sys
+from pathlib import Path
+from unittest import mock
+
+worker_path, pid_path, closed_path = sys.argv[1:4]
+sys.path.insert(0, str(Path(worker_path).parent))
+spec = importlib.util.spec_from_file_location("auto_reply_sigterm_harness", worker_path)
+worker = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(worker)
+
+RUNNER = (
+    "import os, signal, subprocess, sys, time\n"
+    "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+    "child = subprocess.Popen([sys.executable, '-c', "
+    "'import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(60)'])\n"
+    "tmp = sys.argv[1] + '.tmp'\n"
+    "open(tmp, 'w').write(f'{os.getpid()} {child.pid}')\n"
+    "os.replace(tmp, sys.argv[1])\n"
+    "time.sleep(60)\n"
+)
+
+
+class Sampler:
+    def start(self):
+        pass
+
+    def tick(self):
+        pass
+
+    def take(self, now=None):
+        return None
+
+    def close(self):
+        Path(closed_path).write_text("closed")
+
+
+def process_job(job, previous_status, connection):
+    worker._run_bounded_process(
+        [sys.executable, "-c", RUNNER, pid_path],
+        cwd=Path("/tmp"),
+        env=dict(os.environ),
+        timeout=60.0,
+        stdout_cap=1024,
+        stderr_cap=1024,
+        isolate_group=True,
+    )
+
+
+worker._IdleContextSampler = Sampler
+worker._queue_connection = lambda: mock.MagicMock()
+worker._model_circuit_connection = lambda: mock.MagicMock()
+worker._WorkerHealth = lambda: mock.MagicMock()
+worker._rerank_client = lambda: mock.MagicMock()
+worker._refresh_model_status_from_circuit = lambda *a, **k: {}
+worker._rearm_model_call_in_flight_jobs = lambda *a, **k: None
+worker.apply_operator_request = lambda *a, **k: None
+worker.recover_stale_jobs = lambda *a, **k: None
+worker._auto_reconcile_give_up = lambda *a, **k: None
+worker._queue_reconciliation_blockers = lambda *a, **k: 0
+worker.archive_terminal_jobs = lambda *a, **k: 0
+worker.claim_job = lambda *a, **k: ({"event_id": "db:42:1"}, "pending")
+worker.process_job = process_job
+raise SystemExit(worker.worker_main())
+"""
+
+
+class WorkerShutdownTests(unittest.TestCase):
+    def test_sigterm_runs_cleanup_and_stops_the_isolated_model_group(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            harness = root / "harness.py"
+            harness.write_text(SIGTERM_HARNESS, encoding="utf-8")
+            pid_path = root / "runner.pids"
+            closed_path = root / "sampler.closed"
+            process = subprocess.Popen(
+                [sys.executable, str(harness), str(WORKER), str(pid_path), str(closed_path)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+            )
+            leader = descendant = None
+            try:
+                self.assertTrue(
+                    _wait_until(pid_path.is_file, 20.0), "fake model runner never started"
+                )
+                leader, descendant = (int(item) for item in pid_path.read_text().split())
+                # The Rust sweep signals the whole group, then the Python
+                # supervisor's stop() terminates the worker again.
+                process.send_signal(signal.SIGTERM)
+                time.sleep(0.15)
+                if process.poll() is None:
+                    process.send_signal(signal.SIGTERM)
+                try:
+                    _stdout, stderr = process.communicate(timeout=5.0)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    _stdout, stderr = process.communicate()
+                    self.fail("worker did not exit within the supervisor's grace period")
+                self.assertTrue(
+                    _wait_until(lambda: _process_gone(leader), 2.0),
+                    "isolated model runner survived worker shutdown",
+                )
+                self.assertTrue(
+                    _wait_until(lambda: _process_gone(descendant), 2.0),
+                    "isolated model runner descendant survived worker shutdown",
+                )
+                self.assertTrue(closed_path.is_file(), "worker shutdown cleanup did not run")
+                self.assertEqual(process.returncode, 128 + signal.SIGTERM, stderr.decode())
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                    process.wait()
+                if leader is not None:
+                    try:
+                        os.killpg(leader, signal.SIGKILL)
+                    except (ProcessLookupError, PermissionError):
+                        pass
+
+    def test_shutdown_during_a_link_attempt_is_not_retried_on_the_next_address(self):
+        worker = load_worker("auto_reply_link_shutdown_test")
+        attempts: list[str] = []
+
+        class Connection:
+            def __init__(self, ip, *args, **kwargs):
+                self.ip = ip
+                attempts.append(ip)
+
+            def request(self, *args, **kwargs):
+                if self.ip == "192.0.2.1":
+                    raise SystemExit(128 + signal.SIGTERM)
+
+            def getresponse(self):
+                return object()
+
+            def close(self):
+                pass
+
+        addresses = [
+            (None, None, None, "", ("192.0.2.1", 80)),
+            (None, None, None, "", ("192.0.2.2", 80)),
+        ]
+        with mock.patch.object(worker.http.client, "HTTPConnection", Connection):
+            with self.assertRaises(SystemExit):
+                worker._open_pinned_link(
+                    urllib.parse.urlparse("http://example.test/feed"),
+                    "example.test",
+                    80,
+                    addresses,
+                    time.monotonic() + 5.0,
+                )
+        self.assertEqual(attempts, ["192.0.2.1"])
+
+
+class LaughterSelectionTests(unittest.TestCase):
+    def setUp(self):
+        self.worker = load_worker("auto_reply_laughter_selection_test")
+
+    def sanitize(self, draft: str) -> str:
+        return self.worker._sanitize_outbound_reaction(
+            draft, "그건 좀 세네", laughter_allowed=True
+        )
+
+    def test_allowed_four_run_reply_passes_through_unchanged(self):
+        for _ in range(20):
+            self.assertEqual(self.sanitize("ㅋㅋㅋㅋ 그건 좀"), "ㅋㅋㅋㅋ 그건 좀")
+
+    def test_same_draft_always_sanitizes_to_the_same_reply(self):
+        outputs = {self.sanitize("좋네 ㅋㅋㅋ") for _ in range(20)}
+        self.assertEqual(len(outputs), 1, outputs)
+
+    def test_exact_triple_laughter_still_varies_across_drafts(self):
+        drafts = [f"{word} ㅋㅋㅋ" for word in (
+            "좋네", "그렇지", "맞아", "대박", "역시", "아 진짜",
+            "그니까", "오호", "인정", "웃기네", "그럴 줄", "어쩐지",
+        )]
+        lengths = set()
+        for draft in drafts:
+            reply = self.sanitize(draft)
+            run = reply.rsplit(" ", 1)[-1]
+            self.assertRegex(run, r"\Aㅋ{3,}\Z")
+            lengths.add(len(run))
+        self.assertGreater(len(lengths), 1, "every draft kept exactly three ㅋ")
+
+
+def geeknews_feed(*ids: int) -> str:
+    entries = "".join(
+        f"<entry><title><![CDATA[글 {topic}]]></title>"
+        f"<link rel='alternate' href='https://news.hada.io/topic?id={topic}' /></entry>"
+        for topic in ids
+    )
+    return f"<feed>{entries}</feed>"
+
+
+class GeekNewsCursorTests(unittest.TestCase):
+    def setUp(self):
+        self.worker = load_worker("auto_reply_geeknews_cursor_test")
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.state_root = Path(temporary.name)
+        self.room = self.state_root / "rooms" / "325472527151234"
+        self.room.mkdir(parents=True, mode=0o700)
+        self.worker.QUEUE = self.room / "reply-queue.sqlite3"
+        self.cursor_path = self.room / "geeknews-rss-cursor.json"
+
+    def slot_time(self, name: str) -> float:
+        for slot, hour, minute, jitter in self.worker.GEEKNEWS_DAILY_SLOTS:
+            if slot == name:
+                start, _end = self.worker._geeknews_slot_window(
+                    datetime(2026, 8, 16).date(), slot, hour, minute, jitter
+                )
+                return start + 60
+        raise AssertionError(name)
+
+    def test_selecting_a_digest_never_writes_the_cursor(self):
+        now = self.slot_time("morning")
+        first = self.worker._next_geeknews_digest(
+            fetcher=lambda: geeknews_feed(10, 11, 12), now=now
+        )
+        self.assertFalse(
+            self.cursor_path.exists(), "selection persisted seen ids before any send"
+        )
+        second = self.worker._next_geeknews_digest(
+            fetcher=lambda: geeknews_feed(10, 11, 12), now=now
+        )
+        self.assertEqual(first["ids"], [10, 11, 12])
+        self.assertEqual(second["ids"], [10, 11, 12])
+
+    def test_concurrent_confirmed_posts_both_land_in_the_cursor(self):
+        real_replace = os.replace
+        first_writing = threading.Event()
+        second_done = threading.Event()
+        replaced: list[str] = []
+
+        def slow_first_replace(source, destination):
+            replaced.append(str(destination))
+            if len(replaced) == 1:
+                first_writing.set()
+                second_done.wait(1.0)
+            return real_replace(source, destination)
+
+        def confirm(ids, done=None):
+            try:
+                self.worker._mark_geeknews_digest_confirmed(
+                    {"proactive_ids": ids, "proactive_query": "geeknews-rss"},
+                    now=self.slot_time("morning"),
+                )
+            finally:
+                if done is not None:
+                    done.set()
+
+        with mock.patch.object(self.worker.os, "replace", side_effect=slow_first_replace):
+            first = threading.Thread(target=confirm, args=([10, 11],))
+            first.start()
+            self.assertTrue(first_writing.wait(5.0), "first writer never wrote")
+            second = threading.Thread(target=confirm, args=([20, 21], second_done))
+            second.start()
+            first.join(5.0)
+            second.join(5.0)
+        seen = self.worker._load_geeknews_seen_ids()
+        self.assertTrue({10, 11, 20, 21} <= seen, f"lost a confirmed post: {sorted(seen)}")
+
+    def test_a_late_confirmation_marks_the_slot_the_post_belongs_to(self):
+        morning = self.slot_time("morning")
+        lunch = self.slot_time("lunch")
+        self.worker._mark_geeknews_digest_confirmed(
+            {
+                "proactive_ids": [10],
+                "proactive_query": "geeknews-rss",
+                "sent_at": int(morning),
+            },
+            now=lunch,
+        )
+        self.assertFalse(
+            self.worker._geeknews_slot_open(morning + 60),
+            "the morning post did not close the morning slot",
+        )
+        self.assertTrue(
+            self.worker._geeknews_slot_open(lunch + 60),
+            "a morning post confirmed late burned the lunch slot",
+        )
+
+    def test_worker_alerts_when_a_confirmed_post_cannot_be_recorded(self):
+        self.cursor_path.mkdir()
+        stderr = io.StringIO()
+        with mock.patch.object(self.worker.sys, "stderr", stderr):
+            self.worker._mark_geeknews_digest_confirmed(
+                {
+                    "proactive_ids": [10, 11],
+                    "proactive_query": "geeknews-rss",
+                    "sent_at": int(self.slot_time("morning")),
+                }
+            )
+        self.assertRegex(stderr.getvalue(), r"\b10\b.*\b11\b")
+
+    def test_worker_does_not_repost_a_confirmed_digest_the_cursor_missed(self):
+        morning = self.slot_time("morning")
+        lunch = self.slot_time("lunch")
+        connection = sqlite3.connect(":memory:")
+        connection.execute(
+            "CREATE TABLE reply_jobs(event_id TEXT, event_json TEXT, status TEXT, reason TEXT)"
+        )
+        delivered = {
+            "event_id": f"db:42:{int(morning)}",
+            "chat_id": 42,
+            "proactive": True,
+            "proactive_query": "geeknews-rss",
+            "proactive_ids": [10, 11],
+            "sent_at": int(morning),
+        }
+        connection.execute(
+            "INSERT INTO reply_jobs VALUES (?, ?, 'sent', 'geeknews_rss')",
+            (delivered["event_id"], json.dumps(delivered)),
+        )
+        source = {
+            "event_id": "db:42:99",
+            "canonical_event_id": "db:42:99",
+            "chat_id": 42,
+            "log_id": 99,
+            "author_id": 7,
+            "author_nickname": "문승현",
+            "is_self": False,
+            "reply_authorized": True,
+            "message": "요즘 어때",
+            "sent_at": int(lunch) - 10_000,
+        }
+        queued: list[dict] = []
+        with (
+            mock.patch.object(
+                self.worker, "_fetch_geeknews_feed_xml", return_value=geeknews_feed(10, 11, 12)
+            ),
+            mock.patch.dict(
+                os.environ,
+                {
+                    "OPENKAKAO_AUTO_REPLY_STATE_ROOT": str(self.state_root),
+                    "OPENKAKAO_GEEKNEWS_ENABLED": "1",
+                },
+            ),
+        ):
+            enqueued = self.worker.maybe_enqueue_proactive_topic(
+                connection,
+                now=lunch,
+                response_time=None,
+                style_profile=None,
+                last_observed_sent_at=int(lunch) - 10_000,
+                conversation_advanced=False,
+                source_event=source,
+                enqueue=lambda event: queued.append(event) or True,
+            )
+        self.assertIsNotNone(enqueued)
+        self.assertEqual(queued[0]["proactive_ids"], [12])
+
+
+NIMDA = 325472527151234
+OTHER = 417780809780519
+
+
+class GeekNewsOperatorTests(unittest.TestCase):
+    """The host slot CLI: auto-reply-worker.py --geeknews --send."""
+
+    def setUp(self):
+        self.worker = load_worker("auto_reply_geeknews_operator_test")
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.state_root = Path(temporary.name)
+        (self.state_root / "menubar-room-catalog.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "rooms": [
+                        {"chat_id": NIMDA, "title": "NIMDA room", "geeknews": True},
+                        {"chat_id": OTHER, "title": "Other room", "geeknews": True},
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        self.room = self.state_root / "rooms" / str(NIMDA)
+        self.room.mkdir(parents=True, mode=0o700)
+        self.queue = self.room / "reply-queue.sqlite3"
+        self.feed = geeknews_feed(10, 11, 12)
+        self.room_rows: list[dict] = [
+            {"chat_id": NIMDA, "log_id": 500, "sent_at": 900, "is_self": False, "message": "hi"}
+        ]
+        self.reads: list[list[str]] = []
+        self.sends: list[list[str]] = []
+        self.send_result = None
+        self.stderr = io.StringIO()
+
+    def local_read(self, command, **kwargs):
+        self.reads.append(list(command))
+        rows = [row for row in self.room_rows if str(row["chat_id"]) == command[2]]
+        return 0, json.dumps(rows).encode("utf-8"), b""
+
+    def local_send(self, command, **kwargs):
+        self.sends.append(list(command))
+        self.send_kwargs = kwargs
+        if isinstance(self.send_result, BaseException):
+            raise self.send_result
+        window = {"NIMDA room": NIMDA, "Other room": OTHER}.get(command[2])
+        if window is None:
+            return mock.Mock(returncode=1)
+        self.room_rows.append(
+            {
+                "chat_id": window,
+                "log_id": 501,
+                "sent_at": 1000,
+                "is_self": True,
+                "message": command[3],
+            }
+        )
+        return mock.Mock(returncode=0)
+
+    def run_operator(self, *extra: str) -> int:
+        arguments = ["--geeknews", "--send", "--bin", "/fake/openkakao-cli", *extra]
+        with (
+            mock.patch.object(self.worker, "_fetch_geeknews_feed_xml", return_value=self.feed),
+            mock.patch.object(self.worker, "_run_bounded_process", side_effect=self.local_read),
+            mock.patch.object(self.worker.subprocess, "run", side_effect=self.local_send),
+            mock.patch.object(self.worker.time, "time", return_value=1000.0),
+            mock.patch.object(self.worker.sys, "stderr", self.stderr),
+            mock.patch.object(self.worker.sys, "stdout"),
+        ):
+            return self.worker.geeknews_operator_cli(arguments)
+
+    def cursor(self) -> dict:
+        path = self.room / "geeknews-rss-cursor.json"
+        return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+
+    def test_confirmed_send_records_ids_and_the_marked_slot(self):
+        result = self.run_operator(
+            "--chat", "NIMDA room", "--queue", str(self.queue),
+            "--mark-slot", "2026-08-16:morning",
+        )
+        self.assertEqual(result, 0)
+        self.assertEqual(self.sends[0][1:3], ["local-send", "NIMDA room"])
+        self.assertEqual(self.cursor()["seen_ids"], [10, 11, 12])
+        self.assertEqual(self.cursor()["posted_slots"], ["2026-08-16:morning"])
+
+    def test_local_send_is_bounded_by_a_timeout(self):
+        result = self.run_operator("--chat", "NIMDA room", "--queue", str(self.queue))
+        self.assertEqual(result, 0)
+        timeout = self.send_kwargs.get("timeout")
+        self.assertIsNotNone(timeout, "local-send can wait forever")
+        self.assertGreater(timeout, 0)
+        self.assertLessEqual(timeout, 120)
+
+    def test_a_timed_out_send_that_never_landed_leaves_the_cursor_alone(self):
+        self.send_result = subprocess.TimeoutExpired(["local-send"], 60.0)
+        result = self.run_operator("--chat", "NIMDA room", "--queue", str(self.queue))
+        self.assertEqual(result, 3)
+        self.assertEqual(self.cursor(), {})
+
+    def test_a_chat_that_is_not_the_queue_room_is_never_sent(self):
+        result = self.run_operator("--chat", "Other room", "--queue", str(self.queue))
+        self.assertEqual(result, 4)
+        self.assertEqual(self.sends, [], "posted to one room while verifying another")
+
+    def test_a_numeric_chat_sends_to_the_title_bound_to_that_room(self):
+        result = self.run_operator("--chat", f"id:{NIMDA}", "--queue", str(self.queue))
+        self.assertEqual(result, 0)
+        self.assertEqual(self.sends[0][1:3], ["local-send", "NIMDA room"])
+
+    def test_the_queue_has_no_hard_coded_default_room(self):
+        with self.assertRaises(SystemExit):
+            self.run_operator("--chat", "NIMDA room")
+        self.assertEqual(self.sends, [])
+
+    def test_a_confirmed_post_the_cursor_cannot_record_is_reported(self):
+        (self.room / "geeknews-rss-cursor.json").mkdir()
+        result = self.run_operator("--chat", "NIMDA room", "--queue", str(self.queue))
+        self.assertEqual(len(self.sends), 1)
+        self.assertEqual(result, 5, "a confirmed but unrecorded post exited as a success")
+        self.assertRegex(self.stderr.getvalue(), r"\b10\b.*\b11\b.*\b12\b")
+
+    def test_items_the_room_already_shows_as_our_posts_are_not_sent_again(self):
+        self.room_rows += [
+            {
+                "chat_id": NIMDA,
+                "log_id": 498,
+                "sent_at": 800,
+                "is_self": True,
+                "message": "GeekNews TOP5 · 2026-08-16 08:41 KST\n\n"
+                "1. 글 10 https://news.hada.io/topic?id=10\n\n"
+                "2. 글 11 https://news.hada.io/topic?id=11",
+            },
+            {
+                "chat_id": NIMDA,
+                "log_id": 499,
+                "sent_at": 850,
+                "is_self": False,
+                "message": "이거 봤어? https://news.hada.io/topic?id=12",
+            },
+        ]
+        result = self.run_operator("--chat", "NIMDA room", "--queue", str(self.queue))
+        self.assertEqual(result, 0)
+        posted = self.sends[0][3]
+        self.assertNotIn("topic?id=10", posted)
+        self.assertNotIn("topic?id=11", posted)
+        self.assertIn("topic?id=12", posted)
+        self.assertEqual(self.cursor()["seen_ids"], [12])
+
+
+class PortabilityTests(unittest.TestCase):
+    def test_worker_hard_codes_no_account_home_directory(self):
+        source = WORKER.read_text(encoding="utf-8")
+        self.assertEqual(re.findall(r"/Users/[^/\s\"']+/\S*", source), [])
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -190,9 +190,12 @@ fn await_worker_local_confirmation(
     }
 }
 
+/// `pre_send_tail_log_id` is present only for a worker-bound send. An
+/// unconfirmed result carries it, so the worker can look for the reply again
+/// later from the same floor this command confirms from.
 fn local_send_result_json(
     chat_name: &str,
-    worker_bound: bool,
+    pre_send_tail_log_id: Option<i64>,
     confirmation_log_id: Option<i64>,
 ) -> serde_json::Value {
     if let Some(log_id) = confirmation_log_id {
@@ -209,8 +212,9 @@ fn local_send_result_json(
             "status": "accepted_unconfirmed",
             "confirmed": false,
         });
-        if worker_bound {
+        if let Some(tail) = pre_send_tail_log_id {
             result["network"] = serde_json::Value::Bool(false);
+            result["pre_send_tail_log_id"] = serde_json::Value::from(tail);
         }
         result
     }
@@ -401,7 +405,7 @@ pub fn cmd_local_send(opts: LocalSendOptions) -> Result<()> {
         }
     }
 
-    let worker_bound = bound_chat.is_some();
+    let pre_send_tail_log_id = bound_chat.as_ref().map(|bound| bound.pre_send_tail_log_id);
     let confirmation_log_id = if let Some(bound) = bound_chat {
         // Bound worker sends must not spend the 6s context-menu walk first.
         // A failed 답장 arm leaves Kakao menus/composer in a bad state and
@@ -430,7 +434,7 @@ pub fn cmd_local_send(opts: LocalSendOptions) -> Result<()> {
         if json {
             crate::util::output_json(&local_send_result_json(
                 chat_name,
-                worker_bound,
+                pre_send_tail_log_id,
                 Some(log_id),
             ))?;
         } else {
@@ -442,7 +446,11 @@ pub fn cmd_local_send(opts: LocalSendOptions) -> Result<()> {
              Check the chat before retrying to avoid duplicates."
         );
         if json {
-            crate::util::output_json(&local_send_result_json(chat_name, worker_bound, None))?;
+            crate::util::output_json(&local_send_result_json(
+                chat_name,
+                pre_send_tail_log_id,
+                None,
+            ))?;
         } else {
             println!("Message send action completed; delivery unconfirmed.");
         }
@@ -766,21 +774,23 @@ mod tests {
 
     #[test]
     fn worker_confirmation_json_has_proof_without_message_body() {
-        let confirmed = local_send_result_json("target", true, Some(REPLY_LOG_ID));
+        let confirmed = local_send_result_json("target", Some(SOURCE_LOG_ID), Some(REPLY_LOG_ID));
         assert_eq!(confirmed["status"], "confirmed_local_db");
         assert_eq!(confirmed["confirmed"], true);
         assert_eq!(confirmed["confirmation_log_id"], REPLY_LOG_ID);
         assert_eq!(confirmed["network"], false);
         assert!(confirmed.get("message").is_none());
 
-        let unconfirmed = local_send_result_json("target", true, None);
+        let unconfirmed = local_send_result_json("target", Some(SOURCE_LOG_ID), None);
         assert_eq!(unconfirmed["status"], "accepted_unconfirmed");
         assert_eq!(unconfirmed["confirmed"], false);
         assert_eq!(unconfirmed["network"], false);
+        assert_eq!(unconfirmed["pre_send_tail_log_id"], SOURCE_LOG_ID);
         assert!(unconfirmed.get("message").is_none());
 
-        let non_worker = local_send_result_json("target", false, None);
+        let non_worker = local_send_result_json("target", None, None);
         assert!(non_worker.get("network").is_none());
+        assert!(non_worker.get("pre_send_tail_log_id").is_none());
 
         let unavailable = pre_send_unavailable_result_json("target");
         assert_eq!(unavailable["status"], "pre_send_unavailable");

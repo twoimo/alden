@@ -113,6 +113,33 @@ pub(crate) fn leftover_queue_has_unknown_send(
                         "AutoReply leftover queue for {expected_chat_id} has unknown or in-flight sends"
                     );
                 }
+            } else if connection.query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('reply_jobs')
+                 WHERE name = 'ax_mutation_authorized'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )? != 0
+            {
+                // The job row records whether Return may have been pressed;
+                // the capped journal may already have dropped the job's rows.
+                let authorized_unknown: i64 = connection.query_row(
+                    "SELECT COUNT(*) FROM reply_jobs j
+                     WHERE j.status = 'delivery_unknown'
+                       AND j.ax_mutation_authorized = 1
+                       AND NOT EXISTS (
+                          SELECT 1 FROM pipeline_transitions confirmed
+                          WHERE confirmed.event_id = j.event_id
+                            AND confirmed.component = 'ax'
+                            AND confirmed.code = 'local_db_confirmed'
+                       )",
+                    [],
+                    |row| row.get(0),
+                )?;
+                if authorized_unknown != 0 {
+                    anyhow::bail!(
+                        "AutoReply leftover queue for {expected_chat_id} has unknown or in-flight sends"
+                    );
+                }
             } else {
                 let ax_unknown: i64 = connection.query_row(
                     "SELECT COUNT(*) FROM reply_jobs j
@@ -296,5 +323,65 @@ mod leftover_occupancy_tests {
             .expect_err("AX-authorized unknown must occupy leftover");
         let message = format!("{error:#}");
         assert!(message.contains("unknown or in-flight sends"), "{message}");
+    }
+
+    /// A v3 queue keeps the send authority on the job row, where the journal
+    /// cap cannot delete it.
+    fn send_authority_queue(path: &std::path::Path, authorized: i64) {
+        write_queue(
+            path,
+            &format!(
+                r#"
+            CREATE TABLE reply_jobs (
+                event_id TEXT PRIMARY KEY,
+                event_json TEXT NOT NULL,
+                status TEXT NOT NULL,
+                reply TEXT,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                ax_mutation_authorized INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE pipeline_transitions (
+                seq INTEGER PRIMARY KEY,
+                event_id TEXT NOT NULL,
+                component TEXT NOT NULL,
+                from_state TEXT NOT NULL,
+                to_state TEXT NOT NULL,
+                code TEXT NOT NULL
+            );
+            INSERT INTO reply_jobs(
+                event_id,event_json,status,reply,created_at,updated_at,ax_mutation_authorized
+            ) VALUES(
+                'db:42:7',
+                '{{"log_id":7}}',
+                'delivery_unknown',
+                '내일 같이 확인해볼게요',
+                1.0,
+                1.0,
+                {authorized}
+            );
+            "#
+            ),
+        );
+    }
+
+    #[test]
+    fn send_authorized_unknown_occupies_leftover_after_the_journal_dropped_its_rows() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let queue = dir.path().join("reply-queue.sqlite3");
+        send_authority_queue(&queue, 1);
+        let error = leftover_queue_has_unknown_send(&queue, 42)
+            .expect_err("a job whose Return may have fired must occupy leftover");
+        let message = format!("{error:#}");
+        assert!(message.contains("unknown or in-flight sends"), "{message}");
+    }
+
+    #[test]
+    fn unknown_that_never_reached_sending_does_not_occupy_leftover() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let queue = dir.path().join("reply-queue.sqlite3");
+        send_authority_queue(&queue, 0);
+        leftover_queue_has_unknown_send(&queue, 42)
+            .expect("a job that never reached sending must not occupy leftover");
     }
 }
