@@ -2892,6 +2892,27 @@ mod tests {
     }
 
     #[test]
+    fn ax_read_help_and_login_warning_name_its_send_gate() {
+        let mut cli = Cli::command();
+        let help = cli
+            .find_subcommand_mut("ax-read")
+            .expect("ax-read is a subcommand")
+            .render_help()
+            .to_string();
+        assert!(
+            help.contains("allow_ax_send") && help.contains("Return"),
+            "{help}"
+        );
+        let ax_read_mention = SERVER_LOGIN_WARNING
+            .find("ax-read")
+            .expect("the warning recommends ax-read");
+        assert!(
+            SERVER_LOGIN_WARNING[ax_read_mention..].contains("allow_ax_send"),
+            "{SERVER_LOGIN_WARNING}"
+        );
+    }
+
+    #[test]
     fn local_only_commands_suppress_deprecation_warning() {
         let ax_read = Cli::try_parse_from(["openkakao-cli", "ax-read", "나와의 채팅"])
             .expect("ax-read should parse");
