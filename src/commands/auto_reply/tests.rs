@@ -1255,6 +1255,40 @@ fn stopped_clean_queue_rejects_a_v3_queue_that_does_not_keep_its_send_authority(
         assert!(validate_stopped_clean_queue(&stale_trigger, 42).is_err());
     }
 
+    let clearable = room.join("v3-clearable-authority.sqlite3");
+    stopped_clean_queue_v3_fixture(&clearable, false);
+    let connection = rusqlite::Connection::open(&clearable).unwrap();
+    connection
+        .execute_batch("DROP TRIGGER IF EXISTS trg_reply_jobs_keep_send_authority;")
+        .unwrap();
+    drop(connection);
+    assert!(validate_stopped_clean_queue(&clearable, 42).is_err());
+
+    let unauthorized_sending = room.join("v3-sending-without-authority.sqlite3");
+    stopped_clean_queue_v3_fixture(&unauthorized_sending, false);
+    let connection = rusqlite::Connection::open(&unauthorized_sending).unwrap();
+    let keep_trigger_sql: Option<String> = connection
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE name = 'trg_reply_jobs_keep_send_authority'",
+            [],
+            |row| row.get(0),
+        )
+        .ok();
+    connection
+        .execute_batch(
+            "UPDATE reply_jobs SET status = 'sending' WHERE event_id = 'db:42:1';
+             DROP TRIGGER IF EXISTS trg_reply_jobs_keep_send_authority;
+             UPDATE reply_jobs SET ax_mutation_authorized = 0 WHERE event_id = 'db:42:1';",
+        )
+        .unwrap();
+    if let Some(sql) = keep_trigger_sql {
+        connection.execute_batch(&sql).unwrap();
+    }
+    drop(connection);
+    let error = validate_stopped_clean_queue(&unauthorized_sending, 42)
+        .expect_err("a sending job without its send authority must be refused");
+    assert!(format!("{error:#}").contains("send authority"), "{error:#}");
+
     let invalid_value = room.join("v3-invalid-authority.sqlite3");
     stopped_clean_queue_v3_fixture(&invalid_value, false);
     let connection = rusqlite::Connection::open(&invalid_value).unwrap();

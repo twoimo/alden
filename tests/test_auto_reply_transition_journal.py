@@ -296,6 +296,105 @@ class TransitionJournalTests(unittest.TestCase):
             finally:
                 connection.close()
 
+    def test_set_send_authority_cannot_be_cleared(self):
+        jobs = {"db:42:1": ("delivery_unknown", [], True), "db:42:2": ("pending", [], False)}
+        with tempfile.TemporaryDirectory() as temporary:
+            room = self.private_root(temporary) / "42"
+            room.mkdir(mode=0o700)
+            migrated = self.v2_queue_with_jobs(room, jobs)
+            fresh = room.parent / "fresh" / "42"
+            fresh.mkdir(parents=True, mode=0o700)
+            fresh_connection = journal.open_queue(fresh / "reply-queue.sqlite3", create=True)
+            fresh_connection.execute(
+                "INSERT INTO reply_jobs(event_id,event_json,status,created_at,"
+                "updated_at) VALUES('db:42:1','{}','sending',1.0,1.0)"
+            )
+            fresh_connection.execute(
+                "INSERT INTO reply_jobs(event_id,event_json,status,created_at,"
+                "updated_at) VALUES('db:42:2','{}','pending',1.0,1.0)"
+            )
+            fresh_connection.commit()
+            fresh_connection.close()
+            for label, path in (("migrated from v2", migrated), ("created", fresh / "reply-queue.sqlite3")):
+                with self.subTest(queue=label):
+                    connection = journal.open_queue(path, create=True, expected_chat_id=42)
+                    try:
+                        with self.assertRaises(sqlite3.IntegrityError):
+                            connection.execute(
+                                "UPDATE reply_jobs SET ax_mutation_authorized = 0 "
+                                "WHERE event_id = 'db:42:1'"
+                            )
+                        connection.rollback()
+                        connection.execute(
+                            "UPDATE reply_jobs SET status = 'sent', reply = NULL, "
+                            "ax_mutation_authorized = 1 WHERE event_id = 'db:42:1'"
+                        )
+                        connection.execute(
+                            "UPDATE reply_jobs SET ax_mutation_authorized = 0 "
+                            "WHERE event_id = 'db:42:2'"
+                        )
+                        connection.commit()
+                        self.assertEqual(
+                            [
+                                tuple(row)
+                                for row in connection.execute(
+                                    "SELECT event_id, ax_mutation_authorized "
+                                    "FROM reply_jobs ORDER BY event_id"
+                                )
+                            ],
+                            [("db:42:1", 1), ("db:42:2", 0)],
+                        )
+                    finally:
+                        connection.close()
+
+    def test_sending_job_without_send_authority_fails_closed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = self.private_root(temporary)
+            path = root / "queue.sqlite3"
+            connection = journal.open_queue(path, create=True)
+            connection.execute(
+                "INSERT INTO reply_jobs(event_id,event_json,status,created_at,"
+                "updated_at) VALUES('db:1:1','{}','processing',1.0,1.0)"
+            )
+            # Put the row in `sending` past the trigger that would mark it,
+            # then restore the exact schema so only the row is wrong.
+            connection.execute(f"DROP TRIGGER {journal.TRIGGER_UPDATE}")
+            connection.execute("UPDATE reply_jobs SET status = 'sending'")
+            connection.execute(journal.CREATE_UPDATE_TRIGGER_SQL)
+            connection.commit()
+            journal.validate_queue_schema(connection)
+            with self.assertRaisesRegex(sqlite3.DatabaseError, "send authority invalid"):
+                journal.validate_queue_contents(connection)
+            connection.close()
+            with self.assertRaises(sqlite3.DatabaseError):
+                journal.connect_existing_queue(path)
+
+    def test_v3_queue_that_can_clear_its_send_authority_is_refused(self):
+        """A v3 queue laid out before the clear guard existed is not adopted."""
+        with tempfile.TemporaryDirectory() as temporary:
+            room = self.private_root(temporary) / "42"
+            room.mkdir(mode=0o700)
+            path = self.v2_queue_with_jobs(room, {"db:42:1": ("sent", [], True)})
+            connection = sqlite3.connect(path)
+            connection.execute(
+                f"ALTER TABLE reply_jobs ADD COLUMN {journal.SEND_AUTHORITY_COLUMN_SQL}"
+            )
+            for trigger in (journal.TRIGGER_INSERT, journal.TRIGGER_UPDATE):
+                connection.execute(f"DROP TRIGGER {trigger}")
+            connection.execute(journal.CREATE_INSERT_TRIGGER_SQL)
+            connection.execute(journal.CREATE_UPDATE_TRIGGER_SQL)
+            connection.execute(f"PRAGMA user_version = {journal.QUEUE_USER_VERSION}")
+            connection.commit()
+            with self.assertRaises(sqlite3.DatabaseError):
+                journal.validate_queue_schema(connection)
+            connection.close()
+            for open_it in (
+                lambda: journal.connect_existing_queue(path, expected_chat_id=42),
+                lambda: journal.open_queue(path, create=True, expected_chat_id=42),
+            ):
+                with self.assertRaises(sqlite3.DatabaseError):
+                    open_it().close()
+
     def test_tampered_send_authority_fails_closed(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = self.private_root(temporary)
